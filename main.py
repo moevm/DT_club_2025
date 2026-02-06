@@ -9,8 +9,11 @@ from pyglet.window import key
 
 from gym_duckietown.envs import DuckietownEnv
 
-
-CONST_UP_SPEED = 
+# SPEED_SETTINGS (ABS_MEANING!!!)
+CONST_UP_SPEED = np.array([0.44, 0.0])
+CONST_DOWN_SPEED = np.array([0.44, 0])
+CONST_LEFT_SPEED = np.array([0, 1])
+CONST_RIGHT_SPEED = np.array([0, 1])
 
 # python3 main.py --map-name=udem1
 parser = argparse.ArgumentParser()
@@ -88,16 +91,16 @@ def update(dt):
 
     action = np.array([0.0, 0.0])
 
-    if key_handler[key.UP]:
+    if key_handler[key.W]:
         # [-1, 1] - |+-1|: максимальная скорость (~0.30м/c)
         # 1 -> 0 : 0.5 (~ в 2 раза меньше скорость!)
-        action += np.array([0.44, 0.0])
-    if key_handler[key.DOWN]: 
-        action -= np.array([0.44, 0])
-    if key_handler[key.LEFT]:
-        action += np.array([0, 1])
-    if key_handler[key.RIGHT]:
-        action += np.array([0, -1])
+        action += CONST_UP_SPEED
+    if key_handler[key.S]: 
+        action -= CONST_DOWN_SPEED
+    if key_handler[key.A]:
+        action += CONST_LEFT_SPEED
+    if key_handler[key.D]:
+        action -= CONST_RIGHT_SPEED
     if key_handler[key.SPACE]:
         action = np.array([0, 0])
 
@@ -113,6 +116,8 @@ def update(dt):
     print("bot position = ", env.cur_pos)
 
     env.render("human")
+    if key_handler[key.TAB]:
+        env.render("top_down") #idk how to switch
 
 pyglet.clock.schedule_interval(update, 1.0 / env.unwrapped.frame_rate)
 
