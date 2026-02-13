@@ -9,6 +9,13 @@ from pyglet.window import key
 
 from gym_duckietown.envs import DuckietownEnv
 
+# Константы скоростей
+SPEED_FORWARD = np.array([0.44, 0.0])
+SPEED_BACKWARD = np.array([-0.44, 0])
+SPEED_LEFT = np.array([0, 1])
+SPEED_RIGHT = np.array([0, -1])
+SPEED_BOOST_MULTIPLIER = 1.5
+
 
 # python3 main.py --map-name=udem1
 parser = argparse.ArgumentParser()
@@ -77,31 +84,38 @@ env.unwrapped.window.push_handlers(key_handler)
 
 
 RENDER_PARAMS = ["human", "top_down"]
+current_render_params = 0
 
 def update(dt):
     """
     This function is called at every frame to handle
     movement/stepping and redrawing
     """
+    global current_render_params
 
     action = np.array([0.0, 0.0])
 
-    if key_handler[key.UP]:
+    if key_handler[key.W]:
         # [-1, 1] - |+-1|: максимальная скорость (~0.30м/c)
         # 1 -> 0 : 0.5 (~ в 2 раза меньше скорость!)
-        action += np.array([0.44, 0.0])
-    if key_handler[key.DOWN]: 
-        action -= np.array([0.44, 0])
-    if key_handler[key.LEFT]:
-        action += np.array([0, 1])
-    if key_handler[key.RIGHT]:
-        action += np.array([0, -1])
+        action += SPEED_FORWARD
+    if key_handler[key.S]: 
+        action = SPEED_BACKWARD
+    if key_handler[key.A]:
+        action += SPEED_LEFT
+    if key_handler[key.D]:
+        action += SPEED_RIGHT
     if key_handler[key.SPACE]:
         action = np.array([0, 0])
 
     # Speed boost
     if key_handler[key.LSHIFT]:
-        action *= 1.5
+        action *= SPEED_BOOST_MULTIPLIER
+    
+    # Смена вида камеры на TAB
+    if key_handler[key.TAB]:
+        current_render_params = 1 - current_render_params
+
 
     obs, reward, done, info = env.step(action)
     # obs - картинка (в виде трехмерной матрицы)
@@ -110,7 +124,7 @@ def update(dt):
     print("step_count = %s, reward=%.3f" % (env.unwrapped.step_count, reward))
     print("bot position = ", env.cur_pos)
 
-    env.render("human")
+    env.render(RENDER_PARAMS[current_render_params])
 
 pyglet.clock.schedule_interval(update, 1.0 / env.unwrapped.frame_rate)
 
