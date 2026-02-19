@@ -9,7 +9,6 @@ from pyglet.window import key
 
 from gym_duckietown.envs import DuckietownEnv
 
-
 # python3 main.py --map-name=udem1
 parser = argparse.ArgumentParser()
 parser.add_argument("--env-name", default="Duckietown-udem1-v0")
