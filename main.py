@@ -52,6 +52,60 @@ else:
 env.reset()
 env.render()
 
+def move_right(current_angle):
+    action = [0, 0]
+    angle_deg = np.rad2deg(env.cur_angle)
+    delta = -3 
+
+    if delta <= angle_deg <= abs(delta):
+        tap_move_right = False
+    else: # Не довернулись
+        action = [0, -0.5]
+
+    return action
+
+def move_left(current_angle):
+    action = [0, 0]
+    angle_deg = np.rad2deg(env.cur_angle)
+    delta = -3 
+
+    if 180 - abs(delta) <= angle_deg <= 180 or -180 <= angle_deg <=-180 + abs(delta):
+        tap_move_left = False
+    else: # Не довернулись
+        action = [0, 0.5]
+
+    return action
+def move_up(current_angle):
+    action = [0, 0]
+    angle_deg = np.rad2deg(env.cur_angle)
+    delta = -3
+
+    if 90 + delta <= angle_deg <= 90 + (abs(delta)):
+        tap_move_up = False
+    else: # Не довернулись
+        action = [0, -0.5]
+
+    return action
+
+def move_down(current_angle):
+    action = [0, 0]
+    angle_deg = np.rad2deg(env.cur_angle)
+    delta = -3 
+
+    if -90 + delta <= angle_deg <= -90 + abs(delta):
+        tap_move_down = False
+    else: # Не довернулись
+        action = [0, 0.5]
+
+    return action
+
+RENDER_PARAMS = ["human", "top_down"]
+view_mode = RENDER_PARAMS[0]
+tap_move_right = False
+tap_move_left = False
+tap_move_up = False
+tap_move_down = False
+
 
 @env.unwrapped.window.event
 def on_key_press(symbol, modifiers):
@@ -59,6 +113,11 @@ def on_key_press(symbol, modifiers):
     This handler processes keyboard commands that
     control the simulation
     """
+    global tap_move_right
+    global tap_move_left
+    global tap_move_up
+    global tap_move_down
+    global view_mode
 
     if symbol == key.BACKSPACE or symbol == key.SLASH:
         print("RESET")
@@ -66,17 +125,29 @@ def on_key_press(symbol, modifiers):
         env.render()
     elif symbol == key.PAGEUP:
         env.unwrapped.cam_angle[0] = 0
+
     elif symbol == key.ESCAPE:
         env.close()
         sys.exit(0)
 
+    elif key_handler[key.TAB] and view_mode == RENDER_PARAMS[0]:
+        view_mode = RENDER_PARAMS[1]
+    elif key_handler[key.TAB] and view_mode == RENDER_PARAMS[1]:
+        view_mode = RENDER_PARAMS[0]
+
+    elif symbol == key.D:
+        tap_move_right = True
+    elif symbol == key.A:
+        tap_move_left = True
+    elif symbol == key.W:
+        tap_move_up = True
+    elif symbol == key.S:
+        tap_move_down = True
 
 # Register a keyboard handler
 key_handler = key.KeyStateHandler()
 env.unwrapped.window.push_handlers(key_handler)
 
-
-RENDER_PARAMS = ["human", "top_down"]
 
 def update(dt):
     """
@@ -91,13 +162,22 @@ def update(dt):
         # 1 -> 0 : 0.5 (~ в 2 раза меньше скорость!)
         action += np.array([0.44, 0.0])
     if key_handler[key.DOWN]: 
-        action -= np.array([0.44, 0])
+        action += np.array([-0.44, 0])
     if key_handler[key.LEFT]:
         action += np.array([0, 1])
     if key_handler[key.RIGHT]:
         action += np.array([0, -1])
     if key_handler[key.SPACE]:
         action = np.array([0, 0])
+
+    if tap_move_right:
+        action = move_right(env.cur_angle)
+    if tap_move_left:
+        action = move_left(env.cur_angle)
+    if tap_move_up:
+        action = move_up(env.cur_angle)
+    if tap_move_down:
+        action = move_down(env.cur_angle)
 
     # Speed boost
     if key_handler[key.LSHIFT]:
@@ -109,8 +189,11 @@ def update(dt):
     
     print("step_count = %s, reward=%.3f" % (env.unwrapped.step_count, reward))
     print("bot position = ", env.cur_pos)
+    print("bot angle_rad=", env.cur_angle)
+    print(f"bot angle_deg=", np.rad2deg(env.cur_angle))
 
-    env.render("human")
+    env.render(view_mode)
+
 
 pyglet.clock.schedule_interval(update, 1.0 / env.unwrapped.frame_rate)
 
