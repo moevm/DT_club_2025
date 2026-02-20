@@ -1,14 +1,14 @@
 import cv2
 import argparse
 import sys
-
 import gym
 import numpy as np
 import pyglet
 from pyglet.window import key
-
 from gym_duckietown.envs import DuckietownEnv
-i = "test"
+
+RENDER_PARAMS = ["human", "top_down"]
+is_rotating = np.array([False, 0])
 
 # python3 main.py --map-name=udem1
 parser = argparse.ArgumentParser()
@@ -33,7 +33,6 @@ parser.add_argument(
 )
 parser.add_argument("--seed", default=42, type=int, help="seed")
 args = parser.parse_args()
-
 if args.env_name and args.env_name.find("Duckietown") != -1:
     env = DuckietownEnv(
         seed=args.seed,
@@ -48,9 +47,21 @@ if args.env_name and args.env_name.find("Duckietown") != -1:
     )
 else:
     env = gym.make(args.env_name)
-
 env.reset()
 env.render()
+
+
+def rotating(current_angle):
+    global is_rotating
+    action = [0, 0]
+    angle_deg = np.rad2deg(current_angle) # radian -> degrees
+    goal = 180 - 90*is_rotating[1]
+    if goal-5 <= angle_deg <= goal+5:
+        is_rotating = [False, 0]
+    else:
+        action = [0, -1]
+    return action
+
 
 
 @env.unwrapped.window.event
@@ -59,7 +70,7 @@ def on_key_press(symbol, modifiers):
     This handler processes keyboard commands that
     control the simulation
     """
-
+    global is_rotating
     if symbol == key.BACKSPACE or symbol == key.SLASH:
         print("RESET")
         env.reset()
@@ -69,52 +80,55 @@ def on_key_press(symbol, modifiers):
     elif symbol == key.ESCAPE:
         env.close()
         sys.exit(0)
+    elif symbol == key.L:
+        is_rotating = [True, 2]
+    elif symbol == key.I:
+        is_rotating = [True, 1]
+    elif symbol == key.J:
+        is_rotating = [True, 0]
+    elif symbol == key.K:
+        is_rotating = [True, 3]
+        
+
 
 
 # Register a keyboard handler
 key_handler = key.KeyStateHandler()
 env.unwrapped.window.push_handlers(key_handler)
 
-
-RENDER_PARAMS = ["human", "top_down"]
-
 def update(dt):
     """
     This function is called at every frame to handle
     movement/stepping and redrawing
     """
-
+    global is_rotating
     action = np.array([0.0, 0.0])
-
     if key_handler[key.UP]:
         # [-1, 1] - |+-1|: максимальная скорость (~0.30м/c)
         # 1 -> 0 : 0.5 (~ в 2 раза меньше скорость!)
         action += np.array([0.44, 0.0])
     if key_handler[key.DOWN]: 
-        action -= np.array([0.44, 0])
+        action += np.array([-0.44, 0])
     if key_handler[key.LEFT]:
         action += np.array([0, 1])
     if key_handler[key.RIGHT]:
         action += np.array([0, -1])
     if key_handler[key.SPACE]:
         action = np.array([0, 0])
-
+    if is_rotating[0]:
+        action = rotating(env.cur_angle)
     # Speed boost
     if key_handler[key.LSHIFT]:
         action *= 1.5
-
     obs, reward, done, info = env.step(action)
     # obs - картинка (в виде трехмерной матрицы)
     # done = True|False
-    
     print("step_count = %s, reward=%.3f" % (env.unwrapped.step_count, reward))
     print("bot position = ", env.cur_pos)
-
+    print("bot angle=", env.cur_angle)
+    print(f"bot angle=", np.rad2deg(env.cur_angle))
     env.render("human")
-
 pyglet.clock.schedule_interval(update, 1.0 / env.unwrapped.frame_rate)
-
 # Enter main event loop
 pyglet.app.run()
-
 env.close()
