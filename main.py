@@ -8,7 +8,7 @@ import pyglet
 from pyglet.window import key
 
 from gym_duckietown.envs import DuckietownEnv
-
+i = "test"
 
 # python3 main.py --map-name=udem1
 parser = argparse.ArgumentParser()
