@@ -16,6 +16,9 @@ SPEED_LEFT = np.array([0, 1])
 SPEED_RIGHT = np.array([0, -1])
 SPEED_BOOST_MULTIPLIER = 1.5
 
+RENDER_PARAMS = ["human", "top_down"]
+current_render_params = 0
+
 
 # python3 main.py --map-name=udem1
 parser = argparse.ArgumentParser()
@@ -66,6 +69,7 @@ def on_key_press(symbol, modifiers):
     This handler processes keyboard commands that
     control the simulation
     """
+    global current_render_params
 
     if symbol == key.BACKSPACE or symbol == key.SLASH:
         print("RESET")
@@ -76,15 +80,15 @@ def on_key_press(symbol, modifiers):
     elif symbol == key.ESCAPE:
         env.close()
         sys.exit(0)
+        
+    # Смена вида камеры на TAB
+    elif key_handler[key.TAB]:
+        current_render_params = 1 - current_render_params
 
 
 # Register a keyboard handler
 key_handler = key.KeyStateHandler()
 env.unwrapped.window.push_handlers(key_handler)
-
-
-RENDER_PARAMS = ["human", "top_down"]
-current_render_params = 0
 
 def update(dt):
     """
@@ -100,7 +104,7 @@ def update(dt):
         # 1 -> 0 : 0.5 (~ в 2 раза меньше скорость!)
         action += SPEED_FORWARD
     if key_handler[key.S]: 
-        action = SPEED_BACKWARD
+        action += SPEED_BACKWARD
     if key_handler[key.A]:
         action += SPEED_LEFT
     if key_handler[key.D]:
@@ -111,10 +115,6 @@ def update(dt):
     # Speed boost
     if key_handler[key.LSHIFT]:
         action *= SPEED_BOOST_MULTIPLIER
-    
-    # Смена вида камеры на TAB
-    if key_handler[key.TAB]:
-        current_render_params = 1 - current_render_params
 
 
     obs, reward, done, info = env.step(action)
