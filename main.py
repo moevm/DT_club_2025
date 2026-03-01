@@ -9,11 +9,6 @@ from pyglet.window import key
 
 from gym_duckietown.envs import DuckietownEnv
 
-# SPEED_SETTINGS (ABS_MEANING!!!)
-CONST_UP_SPEED = np.array([0.44, 0.0])
-CONST_DOWN_SPEED = np.array([0.44, 0])
-CONST_LEFT_SPEED = np.array([0, 1])
-CONST_RIGHT_SPEED = np.array([0, 1])
 
 # python3 main.py --map-name=udem1
 parser = argparse.ArgumentParser()
@@ -58,12 +53,18 @@ env.reset()
 env.render()
 
 
+
+RENDER_PARAMS = ["human", "top_down"]
+view_mode = RENDER_PARAMS[0]
+
+
 @env.unwrapped.window.event
 def on_key_press(symbol, modifiers):
     """
     This handler processes keyboard commands that
     control the simulation
     """
+    global view_mode
 
     if symbol == key.BACKSPACE or symbol == key.SLASH:
         print("RESET")
@@ -71,17 +72,20 @@ def on_key_press(symbol, modifiers):
         env.render()
     elif symbol == key.PAGEUP:
         env.unwrapped.cam_angle[0] = 0
+
     elif symbol == key.ESCAPE:
         env.close()
         sys.exit(0)
 
+    elif key_handler[key.TAB] and view_mode == RENDER_PARAMS[0]:
+        view_mode = RENDER_PARAMS[1]
+    elif key_handler[key.TAB] and view_mode == RENDER_PARAMS[1]:
+        view_mode = RENDER_PARAMS[0]
 
 # Register a keyboard handler
 key_handler = key.KeyStateHandler()
 env.unwrapped.window.push_handlers(key_handler)
 
-
-RENDER_PARAMS = ["human", "top_down"]
 
 def update(dt):
     """
@@ -91,16 +95,16 @@ def update(dt):
 
     action = np.array([0.0, 0.0])
 
-    if key_handler[key.W]:
+    if key_handler[key.UP]:
         # [-1, 1] - |+-1|: максимальная скорость (~0.30м/c)
         # 1 -> 0 : 0.5 (~ в 2 раза меньше скорость!)
-        action += CONST_UP_SPEED
-    if key_handler[key.S]: 
-        action -= CONST_DOWN_SPEED
-    if key_handler[key.A]:
-        action += CONST_LEFT_SPEED
-    if key_handler[key.D]:
-        action -= CONST_RIGHT_SPEED
+        action += np.array([0.44, 0.0])
+    if key_handler[key.DOWN]: 
+        action -= np.array([0.44, 0])
+    if key_handler[key.LEFT]:
+        action += np.array([0, 1])
+    if key_handler[key.RIGHT]:
+            action += np.array([0, -1])
     if key_handler[key.SPACE]:
         action = np.array([0, 0])
 
@@ -115,9 +119,8 @@ def update(dt):
     print("step_count = %s, reward=%.3f" % (env.unwrapped.step_count, reward))
     print("bot position = ", env.cur_pos)
 
-    env.render("human")
-    if key_handler[key.TAB]:
-        env.render("top_down") #idk how to switch
+    env.render(view_mode)
+
 
 pyglet.clock.schedule_interval(update, 1.0 / env.unwrapped.frame_rate)
 
