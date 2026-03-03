@@ -106,7 +106,6 @@ tap_move_left = False
 tap_move_up = False
 tap_move_down = False
 
-
 @env.unwrapped.window.event
 def on_key_press(symbol, modifiers):
     """
