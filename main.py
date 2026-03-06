@@ -17,8 +17,7 @@ SPEED_RIGHT = np.array([0, -1])
 SPEED_BOOST_MULTIPLIER = 1.5
 
 RENDER_PARAMS = ["human", "top_down"]
-current_render_params = 0
-
+current_render_params = RENDER_PARAMS[0]
 
 # python3 main.py --map-name=udem1
 parser = argparse.ArgumentParser()
@@ -78,12 +77,15 @@ def on_key_press(symbol, modifiers):
     elif symbol == key.PAGEUP:
         env.unwrapped.cam_angle[0] = 0
     elif symbol == key.ESCAPE:
-        env.close()
+        env.close() 
         sys.exit(0)
         
     # Смена вида камеры на TAB
     elif key_handler[key.TAB]:
-        current_render_params = 1 - current_render_params
+        if current_render_params == RENDER_PARAMS[0]: 
+            current_render_params = RENDER_PARAMS[1]
+        elif current_render_params == RENDER_PARAMS[1]: 
+            current_render_params = RENDER_PARAMS[0]
 
 
 # Register a keyboard handler
@@ -124,7 +126,7 @@ def update(dt):
     print("step_count = %s, reward=%.3f" % (env.unwrapped.step_count, reward))
     print("bot position = ", env.cur_pos)
 
-    env.render(RENDER_PARAMS[current_render_params])
+    env.render(current_render_params)
 
 pyglet.clock.schedule_interval(update, 1.0 / env.unwrapped.frame_rate)
 
