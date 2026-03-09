@@ -61,6 +61,79 @@ else:
 env.reset()
 env.render()
 
+def move_right(current_angle):
+    global is_move_right
+    action = [0, 0]
+
+    angle_deg = np.rad2deg(current_angle)
+    delta = 5
+
+    if -delta <= angle_deg <= delta:
+        is_move_right = False
+    else:
+        if 0 < angle_deg <= 180:
+            action = SPEED_RIGHT
+        elif -180 <= angle_deg <= 0:
+            action = SPEED_LEFT
+
+    return action
+
+
+def move_left(current_angle):
+    global is_move_left
+    action = [0, 0]
+
+    angle_deg = np.rad2deg(current_angle)
+    delta = 5
+
+    if (angle_deg > 0 and angle_deg >= 180 - delta) or (angle_deg < 0 and angle_deg <= -180 + delta):
+        is_move_left = False
+    else:
+        if 0 <= angle_deg < 180:
+            action = SPEED_LEFT
+        elif -180 <= angle_deg < 0:
+            action = SPEED_RIGHT
+
+    return action
+
+
+def move_forward(current_angle):
+    global is_move_forward
+    action = [0, 0]
+
+    angle_deg = np.rad2deg(current_angle)
+    delta = 5
+
+    if 90 - delta <= angle_deg <= 90 + delta:
+        is_move_forward = False
+    else:
+        if -90 <= angle_deg <= 90:
+            action = SPEED_LEFT
+        else:
+            action = SPEED_RIGHT
+
+    return action
+
+
+def move_back(current_angle):
+    global is_move_back
+    action = [0, 0]
+
+    angle_deg = np.rad2deg(current_angle)
+    delta = 5
+
+    if -90 - delta <= angle_deg <= -90 + delta:
+        is_move_back = False
+    else:
+        if angle_deg > -90:
+            if angle_deg > 90:
+                action = SPEED_LEFT
+            else:
+                action = SPEED_RIGHT
+        else:
+            action = SPEED_LEFT
+
+    return action
 
 @env.unwrapped.window.event
 def on_key_press(symbol, modifiers):
@@ -69,6 +142,11 @@ def on_key_press(symbol, modifiers):
     control the simulation
     """
     global current_render_params
+
+    global is_move_right
+    global is_move_left
+    global is_move_forward
+    global is_move_back
 
     if symbol == key.BACKSPACE or symbol == key.SLASH:
         print("RESET")
@@ -87,10 +165,25 @@ def on_key_press(symbol, modifiers):
         elif current_render_params == RENDER_PARAMS[1]: 
             current_render_params = RENDER_PARAMS[0]
 
+    #Автоматический поворот на JILK
+    elif key_handler[key.J]:
+        is_move_left = True
+    elif key_handler[key.I]:
+        is_move_forward = True
+    elif key_handler[key.L]:
+        is_move_right = True
+    elif key_handler[key.K]:
+        is_move_back = True
+
 
 # Register a keyboard handler
 key_handler = key.KeyStateHandler()
 env.unwrapped.window.push_handlers(key_handler)
+
+is_move_right = False
+is_move_left = False
+is_move_forward = False
+is_move_back = False
 
 def update(dt):
     """
@@ -98,6 +191,11 @@ def update(dt):
     movement/stepping and redrawing
     """
     global current_render_params
+
+    global is_move_right
+    global is_move_left
+    global is_move_forward
+    global is_move_back
 
     action = np.array([0.0, 0.0])
 
@@ -117,6 +215,15 @@ def update(dt):
     # Speed boost
     if key_handler[key.LSHIFT]:
         action *= SPEED_BOOST_MULTIPLIER
+
+    if is_move_right:
+        action  = move_right(env.cur_angle)
+    if is_move_left:
+        action  = move_left(env.cur_angle)
+    if is_move_forward:
+        action  = move_forward(env.cur_angle)
+    if is_move_back:
+        action  = move_back(env.cur_angle)
 
 
     obs, reward, done, info = env.step(action)
