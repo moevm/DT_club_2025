@@ -148,6 +148,8 @@ def on_key_press(symbol, modifiers):
     global is_move_forward
     global is_move_back
 
+    global camera_image
+
     if symbol == key.BACKSPACE or symbol == key.SLASH:
         print("RESET")
         env.reset()
@@ -155,6 +157,8 @@ def on_key_press(symbol, modifiers):
     elif symbol == key.PAGEUP:
         env.unwrapped.cam_angle[0] = 0
     elif symbol == key.ESCAPE:
+        writer_image.release()
+        writer_mask_yellow.release()
         env.close() 
         sys.exit(0)
         
@@ -175,15 +179,107 @@ def on_key_press(symbol, modifiers):
     elif key_handler[key.K]:
         is_move_back = True
 
-
 # Register a keyboard handler
 key_handler = key.KeyStateHandler()
 env.unwrapped.window.push_handlers(key_handler)
+
+
+def filter_small_contours(contours, min_contour_area):
+    filtered = []
+
+    for contour in contours:
+        if cv2.contourArea(contour) >= min_contour_area:
+            filtered.append(contour)
+
+    return filtered
+
+
+def get_yellow_mask(hsv_image):
+    lower = np.array([20, 100, 100])
+    upper = np.array([30, 255, 255])
+    return cv2.inRange(hsv_image, lower, upper)
+
+
+def get_grey_mask(rgb_image):
+    grey_lower = np.array([160, 160, 160])
+    grey_upper = np.array([200, 200, 200])
+    return cv2.inRange(rgb_image, grey_lower, grey_upper)
+
+
+def get_red_mask(hsv_image):
+    lower_red1 = np.array([0, 120, 70])
+    upper_red1 = np.array([10, 255, 255])
+
+    lower_red2 = np.array([170, 120, 70])
+    upper_red2 = np.array([179, 255, 255])
+
+    mask1 = cv2.inRange(hsv_image, lower_red1, upper_red1)
+    mask2 = cv2.inRange(hsv_image, lower_red2, upper_red2)
+
+    return cv2.bitwise_or(mask1, mask2)
+
+
+def get_filtered_contours(mask, min_contour_area):
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    return filter_small_contours(contours, min_contour_area)
+
+
+
+def draw_contours_on_image(rgb_image, contours):
+    result = cv2.cvtColor(rgb_image, cv2.COLOR_RGB2BGR)
+    cv2.drawContours(result, contours, -1, (0, 255, 100), 2)
+    return result
+
+
+def process_bot_image(obs):
+    bgr_image = cv2.cvtColor(obs, cv2.COLOR_RGB2BGR)
+    hsv_image = cv2.cvtColor(obs, cv2.COLOR_RGB2HSV)
+
+    mask_yellow = get_yellow_mask(hsv_image)
+    mask_grey = get_grey_mask(obs)
+    mask_red = get_red_mask(hsv_image)
+
+    red_contours = get_filtered_contours(mask_red, 50)
+    result_contours = draw_contours_on_image(obs, red_contours)
+
+    return bgr_image, hsv_image, mask_yellow, mask_grey, mask_red, result_contours
+
+
+def get_bot_image(obs):
+    bgr_image, hsv_image, mask_yellow, mask_grey, mask_red, result_contours = process_bot_image(obs)
+
+    cv2.imshow("camera image view", bgr_image)
+    cv2.imshow("hsv format", hsv_image)
+    cv2.imshow("red mask", mask_red)
+    cv2.imshow("yellow mask", mask_yellow)
+    cv2.imshow("grey mask", mask_grey)
+    cv2.imshow("red contours", result_contours)
+
+
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
 
 is_move_right = False
 is_move_left = False
 is_move_forward = False
 is_move_back = False
+
+is_view_image = False 
+
+writer_image = cv2.VideoWriter(
+    "output.mp4",
+    cv2.VideoWriter_fourcc(*"mp4v"),
+    20,
+    (640, 480), # (witch, height)
+)  
+
+writer_mask_yellow = cv2.VideoWriter(
+    "mask.mp4",
+    cv2.VideoWriter_fourcc(*"mp4v"),
+    20,
+    (640, 480), # (witch, height)
+)  
 
 def update(dt):
     """
@@ -196,6 +292,8 @@ def update(dt):
     global is_move_left
     global is_move_forward
     global is_move_back
+
+    global is_view_image
 
     action = np.array([0.0, 0.0])
 
@@ -226,12 +324,29 @@ def update(dt):
         action  = move_back(env.cur_angle)
 
 
-    obs, reward, done, info = env.step(action)
+
+    obs, reward, done, info = env.step(action) # -> return as RGB format
+    bgr_image, hsv_image, mask_yellow, mask_grey, mask_red, result_contours = process_bot_image(obs)
+
+    if key_handler[key.F]:
+        if not is_view_image:
+            get_bot_image(obs)
+            is_view_image = True
+    else:
+        is_view_image = False 
+
     # obs - картинка (в виде трехмерной матрицы)
     # done = True|False
+
     
     print("step_count = %s, reward=%.3f" % (env.unwrapped.step_count, reward))
     print("bot position = ", env.cur_pos)
+    print(obs.shape)
+
+
+    yellow_bgr = cv2.cvtColor(mask_yellow, cv2.COLOR_GRAY2BGR)
+    writer_mask_yellow.write(yellow_bgr)
+    writer_image.write(bgr_image)
 
     env.render(current_render_params)
 
@@ -241,3 +356,4 @@ pyglet.clock.schedule_interval(update, 1.0 / env.unwrapped.frame_rate)
 pyglet.app.run()
 
 env.close()
+
