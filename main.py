@@ -105,6 +105,8 @@ tap_move_left = False
 tap_move_up = False
 tap_move_down = False
 is_view_image = False
+red_stop = False
+
 
 @env.unwrapped.window.event
 def on_key_press(symbol, modifiers):
@@ -161,8 +163,7 @@ env.unwrapped.window.push_handlers(key_handler)
 
 def get_bot_image(obs):
 
-
-    to_show = cv2.cvtColor(obs, cv2.COLOR_RGB2BGR)
+    bgr_image = cv2.cvtColor(obs, cv2.COLOR_RGB2BGR)
 
     hsv_image = cv2.cvtColor(obs, cv2.COLOR_RGB2HSV)
 
@@ -175,13 +176,42 @@ def get_bot_image(obs):
     upper_gray = np.array([200, 200, 200])
     mask_gray = cv2.inRange(obs, lower_gray, upper_gray)
 
+    '''
+    lower_red_1 = np.array([0, 120, 70])
+    upper_red_1 = np.array([10, 255, 255])
+    lower_red_2 = np.array([160, 120, 70])
+    upper_red_2 = np.array([180, 255, 255])
+    mask_red_1 = cv2.inRange(hsv_image, lower_red_1, upper_red_1)
+    mask_red_2 = cv2.inRange(hsv_image, lower_red_2, upper_red_2)
+    mask_red = cv2.bitwise_or(mask_red_1, mask_red_2)
+    hsv2rgb_red_image = cv2.cvtColor(mask_red, cv2.COLOR_GRAY2RGB)
+    '''
+
+    cv2.imshow("camera image view", bgr_image)
     cv2.imshow("gray2rgb", hsv2rgb_yel_image)
-    cv2.imshow("camera image view", to_show)
     cv2.imshow("hsv format", hsv_image)
-    cv2.imshow("yellow mask", mask_yellow)
     cv2.imshow("gray mask", mask_gray)
+    '''
+    cv2.imshow("red mask", hsv2rgb_red_image)
+
+    h,  w = obs.shape[0], obs.shape[1]
+    mask_red[0:h//2, :] = 0
+
+    contours, _ = cv2.findContours(image=mask_red, mode=cv2.RETR_EXTERNAL, method=cv2.CHAIN_APPROX_SIMPLE)
+    contours = [contour for contour in contours if cv2.contourArea(contour) >= 25]
+    image_with_contours = cv2.drawContours(image=bgr_image.copy(), contours=contours, contourIdx=-1, color=(0, 255, 0), thickness = 3)
+
+    max_contours = max(contours, key=cv2.contourArea)
+    dist = cv2.pointPolygonTest(max_contours, (w // 2, h - 1), True)
+
+    print(np.abs(dist))
+
+    cv2.imshow("red mask", mask_red)
+    cv2.imshow('red contours', image_with_contours)
+    '''
 
     cv2.waitKey(0)
+    cv2.destroyAllWindows()
 
 
 def update(dt):
@@ -190,16 +220,16 @@ def update(dt):
     movement/stepping and redrawing
     """
 
-    global is_view_image
+    global red_stop, is_view_image
 
     action = np.array([0.0, 0.0])
 
     if key_handler[key.UP]:
         # [-1, 1] - |+-1|: максимальная скорость (~0.30м/c)
         # 1 -> 0 : 0.5 (~ в 2 раза меньше скорость!)
-        action += np.array([speed, 0.0])
-    if key_handler[key.DOWN]: 
         action += np.array([speed, 0])
+    if key_handler[key.DOWN]: 
+        action -= np.array([speed, 0])
     if key_handler[key.LEFT]:
         action += np.array([0, 1])
     if key_handler[key.RIGHT]:
@@ -216,13 +246,47 @@ def update(dt):
     if tap_move_down:
         action = move_down(env.cur_angle)
 
-
-
     # Speed boost
     if key_handler[key.LSHIFT]:
         action *= 1.5
 
+    if red_stop:
+        action = np.array([0, 0])
+
     obs, reward, done, info = env.step(action) # -> return as RGB format
+
+    h,  w = obs.shape[0], obs.shape[1]
+
+    hsv_image = cv2.cvtColor(obs, cv2.COLOR_RGB2HSV)
+
+    lower_red_1 = np.array([0, 120, 70])
+    upper_red_1 = np.array([10, 255, 255])
+    lower_red_2 = np.array([160, 120, 70])
+    upper_red_2 = np.array([180, 255, 255])
+    mask_red_1 = cv2.inRange(hsv_image, lower_red_1, upper_red_1)
+    mask_red_2 = cv2.inRange(hsv_image, lower_red_2, upper_red_2)
+    mask_red = cv2.bitwise_or(mask_red_1, mask_red_2)
+
+    mask_red[0:h//2, :] = 0
+
+    contours, _ = cv2.findContours(image=mask_red, mode=cv2.RETR_EXTERNAL, method=cv2.CHAIN_APPROX_SIMPLE)
+    contours = [contour for contour in contours if cv2.contourArea(contour) >= 25]
+
+    if contours:
+        max_contours = max(contours, key=cv2.contourArea)
+        dist = cv2.pointPolygonTest(max_contours, (w // 2, h - 1), True)
+
+        dist_abs = np.abs(dist)
+        print(dist_abs)
+
+        if dist_abs < 150:
+            red_stop = True
+        else:
+            red_stop = False
+    else:
+        red_stop = False
+
+
 
     if key_handler[key.F]:
         if not is_view_image:
