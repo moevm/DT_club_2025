@@ -106,6 +106,8 @@ tap_move_up = False
 tap_move_down = False
 is_view_image = False
 red_stop = False
+ignore_red_stop = False
+last_steering = 0
 
 
 @env.unwrapped.window.event
@@ -114,7 +116,7 @@ def on_key_press(symbol, modifiers):
     This handler processes keyboard commands that
     control the simulation
     """
-    global tap_move_right, tap_move_left, tap_move_up, tap_move_down, view_mode
+    global tap_move_right, tap_move_left, tap_move_up, tap_move_down, view_mode, ignore_red_stop
 
     if symbol == key.BACKSPACE or symbol == key.SLASH:
         print("RESET")
@@ -132,22 +134,22 @@ def on_key_press(symbol, modifiers):
     elif key_handler[key.TAB]:
         view_mode = RENDER_PARAMS[1] if view_mode == RENDER_PARAMS[0] else RENDER_PARAMS[0]
 
-    elif symbol == key.D:
+    elif symbol == key.RIGHT:
         tap_move_right = True
         tap_move_left = False
         tap_move_up = False
         tap_move_down = False
-    elif symbol == key.A:
+    elif symbol == key.LEFT:
         tap_move_right = False
         tap_move_left = True
         tap_move_up = False
         tap_move_down = False
-    elif symbol == key.W:
+    elif symbol == key.UP:
         tap_move_right = False
         tap_move_left = False
         tap_move_up = True
         tap_move_down = False
-    elif symbol == key.S:
+    elif symbol == key.DOWN:
         tap_move_right = False
         tap_move_left = False
         tap_move_up = False
@@ -155,6 +157,12 @@ def on_key_press(symbol, modifiers):
 
     elif symbol == key.F:
         is_view_image = True
+    
+    #остановка на красный цвет
+    elif symbol == key.I:
+        ignore_red_stop = True
+    elif symbol == key.J:
+        ignore_red_stop = False
 
 # Register a keyboard handler
 key_handler = key.KeyStateHandler()
@@ -214,6 +222,57 @@ def get_bot_image(obs):
     cv2.destroyAllWindows()
 
 
+def lane_follow(obs):
+
+    global last_steering
+
+    h, w = obs.shape[:2]
+    hsv_image = cv2.cvtColor(obs,cv2.COLOR_RGB2HSV)
+
+    mask = cv2.inRange(
+        hsv_image[h // 2 : h - 1, :], np.array([20, 100, 100]), np.array([30, 255, 255])
+    )
+
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+
+    #фильтрация пикселей
+    contours = [contour for contour in contours if cv2.contourArea(contour) > 10]
+
+    lx = None
+    if contours:
+        largest_contour = max(contours, key=cv2.contourArea)
+        M = cv2.moments(largest_contour)
+        if M["m00"] != 0:
+            lx = int(M["m10"] / M["m00"])
+
+            center_x = w / 2
+            deviation = center_x - lx
+            if deviation > 0:
+                last_steering = 1
+            else:
+                last_steering = -1
+
+
+    steering_angle = 0.0
+    if lx is not None:
+        center_x = w / 2
+        deviation = center_x - lx
+        steering_angle = deviation / center_x
+    else:
+        if last_steering == 1:
+            steering_angle = 1.0
+        elif last_steering == -1:
+            steering_angle = -1.0
+        else:
+            steering_angle = 0.0
+
+
+    #cv2.imshow('mask', mask)
+    #cv2.waitKey(0)
+    #cv2.destroyAllWindows()
+
+    return steering_angle
+
 def update(dt):
     """
     This function is called at every frame to handle
@@ -224,15 +283,15 @@ def update(dt):
 
     action = np.array([0.0, 0.0])
 
-    if key_handler[key.UP]:
+    if key_handler[key.W]:
         # [-1, 1] - |+-1|: максимальная скорость (~0.30м/c)
         # 1 -> 0 : 0.5 (~ в 2 раза меньше скорость!)
         action += np.array([speed, 0])
-    if key_handler[key.DOWN]: 
+    if key_handler[key.S]: 
         action -= np.array([speed, 0])
-    if key_handler[key.LEFT]:
+    if key_handler[key.A]:
         action += np.array([0, 1])
-    if key_handler[key.RIGHT]:
+    if key_handler[key.D]:
         action += np.array([0, -1])
     if key_handler[key.SPACE]:
         action = np.array([0, 0])
@@ -250,8 +309,13 @@ def update(dt):
     if key_handler[key.LSHIFT]:
         action *= 1.5
 
-    if red_stop:
+    if red_stop and not ignore_red_stop:
         action = np.array([0, 0])
+
+    if key_handler[key.X]:
+        obs = env.render_obs()
+        steering_angle = lane_follow(obs)
+        action += np.array([speed / 2, steering_angle])
 
     obs, reward, done, info = env.step(action) # -> return as RGB format
 
@@ -272,15 +336,18 @@ def update(dt):
     contours, _ = cv2.findContours(image=mask_red, mode=cv2.RETR_EXTERNAL, method=cv2.CHAIN_APPROX_SIMPLE)
     contours = [contour for contour in contours if cv2.contourArea(contour) >= 25]
 
-    if contours:
-        max_contours = max(contours, key=cv2.contourArea)
-        dist = cv2.pointPolygonTest(max_contours, (w // 2, h - 1), True)
+    if not ignore_red_stop:
+        if contours:
+            max_contours = max(contours, key=cv2.contourArea)
+            dist = cv2.pointPolygonTest(max_contours, (w // 2, h - 1), True)
 
-        dist_abs = np.abs(dist)
-        print(dist_abs)
+            dist_abs = np.abs(dist)
+            print(dist_abs)
 
-        if dist_abs < 150:
-            red_stop = True
+            if dist_abs < 150:
+                red_stop = True
+            else:
+                red_stop = False
         else:
             red_stop = False
     else:
