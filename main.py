@@ -228,16 +228,80 @@ def lane_follow(obs):
 
     h, w = obs.shape[:2]
     hsv_image = cv2.cvtColor(obs,cv2.COLOR_RGB2HSV)
+    
 
-    mask = cv2.inRange(
+    mask_yellow = cv2.inRange(
         hsv_image[h // 2 : h - 1, :], np.array([20, 100, 100]), np.array([30, 255, 255])
     )
+    mask_gray = cv2.inRange(
+        hsv_image[h // 2 : h - 1, :], np.array([0, 0, 120]), np.array([180, 80, 255])
+    )
 
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    
+    contours_yellow, _ = cv2.findContours(mask_yellow, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    contours_gray, _ = cv2.findContours(mask_gray, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
 
+    contours_yellow = [contour for contour in contours_yellow if cv2.contourArea(contour) > 10]
+    contours_gray = [contour for contour in contours_gray if cv2.contourArea(contour) > 10]
+
+
+
+    steering_angle = 0
+    
+    if contours_yellow and contours_gray:
+        #фильтр контуров 
+        
+
+        x1, x2 = None, None
+
+        all_x_yellow = []
+        for contour in contours_yellow:
+            for point in contour:
+                all_x_yellow.append(point[0][0])
+        x1 = np.median(all_x_yellow)
+
+
+
+            # largest_contour_yellow = max(contours_yellow, key=cv2.contourArea) #контур с самой большой площадью
+            # # 1 по всем точкам контуров
+            # M = cv2.moments(largest_contour_yellow)
+            # if M["m00"] != 0:
+            #    x1 = int(M["m10"] / M["m00"])
+
+        largest_contour_gray = max(contours_gray, key=cv2.contourArea) #контур с самой большой площадью
+        # 1 по всем точкам контуров
+        M = cv2.moments(largest_contour_gray)
+        if M["m00"] != 0:
+            x2 = int(M["m10"] / M["m00"])
+
+
+            line_center_x = (x1 + x2) / 2
+            deviation = - (line_center_x - w * 0.5) / (w * 0.5)
+            steering_angle = deviation * 1 
+            print(steering_angle)
+
+            if steering_angle > 0:
+                last_steering = 1
+            elif steering_angle < 0:
+                last_steering = -1
+            else:
+                last_steering = 0
+
+    elif contours_gray and not contours_yellow:
+        steering_angle = 1
+    elif contours_yellow and not contours_gray:
+        steering_angle = -1
+    else:
+        if last_steering == 1:
+            steering_angle = 1
+        elif last_steering == -1:
+            steering_angle = -1
+        else:
+            steering_angle = 0
+        
     #фильтрация пикселей
-    contours = [contour for contour in contours if cv2.contourArea(contour) > 10]
-
+    #contours = [contour for contour in contours if cv2.contourArea(contour) > 10]
+    '''
     lx = None
     if contours:
         largest_contour = max(contours, key=cv2.contourArea)
@@ -265,9 +329,10 @@ def lane_follow(obs):
             steering_angle = -1.0
         else:
             steering_angle = 0.0
-
-
-    #cv2.imshow('mask', mask)
+    '''
+            
+    #cv2.imshow('mask gray', mask_gray)
+    #cv2.imshow('mask yellow', mask_yellow)
     #cv2.waitKey(0)
     #cv2.destroyAllWindows()
 
@@ -309,13 +374,14 @@ def update(dt):
     if key_handler[key.LSHIFT]:
         action *= 1.5
 
-    if red_stop and not ignore_red_stop:
-        action = np.array([0, 0])
 
     if key_handler[key.X]:
         obs = env.render_obs()
         steering_angle = lane_follow(obs)
         action += np.array([speed / 2, steering_angle])
+
+    if red_stop and not ignore_red_stop:
+        action = np.array([0, 0])
 
     obs, reward, done, info = env.step(action) # -> return as RGB format
 
