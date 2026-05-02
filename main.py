@@ -98,6 +98,7 @@ def on_key_press(symbol, modifiers):
         env.unwrapped.cam_angle[0] = 0
     elif symbol == key.ESCAPE:
         writer.release()
+        writer_y.release()
         env.close()
         sys.exit(0)
     elif symbol == key.L:
@@ -119,16 +120,50 @@ def g_b_image(obs):
     
     
     hsv_image=cv2.cvtColor(obs, cv2.COLOR_RGB2HSV)
-    lower=np.array([20,100,100])
-    upper=np.array([30,255,255])
-    mask_yellow=cv2.inRange(hsv_image,lower,upper)
+    lower_y=np.array([20,100,100])
+    upper_y=np.array([30,255,255])
+    mask_yellow=cv2.inRange(hsv_image,lower_y,upper_y)
     
+    lower_g=np.array([160,160,160])
+    upper_g=np.array([200,200,200])
+    mask_gray=cv2.inRange(obs,lower_g,upper_g)
+    
+    lower_r1 = np.array([1, 100, 100])
+    upper_r1 = np.array([10, 254, 254])
+    lower_r2 = np.array([160, 100, 100])
+    upper_r2 = np.array([179, 254, 254])
+    mask_r1 = cv2.inRange(hsv_image, lower_r1, upper_r1)
+    mask_r2 = cv2.inRange(hsv_image, lower_r2, upper_r2)
+    mask_r = cv2.bitwise_or(mask_r1, mask_r2)
+    
+    h,  w = obs.shape[0], obs.shape[1]
+    mask_r[0:h//2, :] = 0
+    
+    r_image = cv2.cvtColor(mask_r, cv2.COLOR_GRAY2BGR)
+
     
     cv2.imshow("yellow mask", mask_yellow)
-    # cv2.imshow("gray mask", mask_gray)
+    cv2.imshow("gray mask", mask_gray)
+    cv2.imshow("red mask", r_image)
+
+
+    contours, _ = cv2.findContours(image=mask_r, mode=cv2.RETR_EXTERNAL, method=cv2.CHAIN_APPROX_SIMPLE)
+    contours = [contour for contour in contours if cv2.contourArea(contour) >= 25]
+    image_with_contours = cv2.drawContours(image=to_show.copy(), 
+    contours=contours, contourIdx=-1, color=(0, 255, 0), thickness = 3)
+
+    if contours:
+        max_contours = max(contours, key=cv2.contourArea)
+        dist = cv2.pointPolygonTest(max_contours, (w // 2, h - 1), True)
+
+        print(np.abs(dist))
+
+    cv2.imshow("red mask", mask_r)
+    cv2.imshow('red contours', image_with_contours)
+    
     
     cv2.waitKey(0)
-    cv2.destroyALLWindows()
+    cv2.destroyAllWindows()
 
 RENDER_PARAMS = ["human", "top_down"]
 writer=cv2.VideoWriter (
@@ -145,8 +180,57 @@ writer_y=cv2.VideoWriter (
 (640, 480),
 )
 
-global bgr_image1
+def lane_follow(obs):
+    h,w=obs.shape[:2]
+    
+    hsv_image=cv2.cvtColor(obs, cv2.COLOR_RGB2HSV)
+    mask=cv2.inRange(
+        hsv_image[h//2:h-1, : ], np.array([20,100,100]), np.array([30,255,255])
+    )
+       
+    global last_steering
 
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    contours = [contour for contour in contours if cv2.contourArea(contour) > 10]
+
+    lx = None
+    if contours:
+        largest_contour = max(contours, key=cv2.contourArea)
+        M = cv2.moments(largest_contour)
+        if M["m00"] != 0:
+            lx = int(M["m10"] / M["m00"])
+
+            center_x = w / 2
+            deviation = center_x - lx
+            if deviation > 0:
+                last_steering = 1
+            else:
+                last_steering = -1
+
+
+    steering_angle = 0.0
+    if lx is not None:
+        center_x = w / 2
+        deviation = center_x - lx
+        steering_angle = deviation / center_x
+    else:
+        if last_steering == 1:
+            steering_angle = 1.0
+        elif last_steering == -1:
+            steering_angle = -1.0
+        else:
+            steering_angle = 0.0
+
+
+    cv2.imshow('mask', mask)
+    
+    
+    #cv2.waitKey(0)
+    #cv2.destroyAllWindows()
+    return steering_angle
+    
+global bgr_image1
+last_steering=0
 boolcam=True
 s_m_right=False
 s_v_image=False
@@ -187,6 +271,11 @@ def update(dt):
     if s_m_right:
         action=m_right(env.cur_angle)
     
+    if key_handler[key.X]:
+        obs = env.render_obs()
+        steering_angle = lane_follow(obs)
+        action += np.array([0.4 / 2 , steering_angle])
+    
     # Speed boost
     if key_handler[key.LSHIFT]:
         action *= 1.5
@@ -194,6 +283,37 @@ def update(dt):
     obs, reward, done, info = env.step(action)
     # obs - картинка (в виде трехмерной матрицы)
     # done = True|False
+    
+    h,w = obs.shape[0],obs.shape[1]
+
+    hsv_image = cv2.cvtColor(obs, cv2.COLOR_RGB2HSV)
+
+    lower_r1 = np.array([0, 150, 90])
+    upper_r1 = np.array([10, 255, 255])
+    lower_r2 = np.array([170, 200, 120])
+    upper_r2 = np.array([175, 255, 255])
+    mask_r1 = cv2.inRange(hsv_image, lower_r1, upper_r1)
+    mask_r2 = cv2.inRange(hsv_image, lower_r2, upper_r2)
+    mask_r = cv2.bitwise_or(mask_r1, mask_r2)
+
+    mask_r[0:h//2, :] = 0
+
+    contours, _ = cv2.findContours(image=mask_r, mode=cv2.RETR_EXTERNAL, method=cv2.CHAIN_APPROX_SIMPLE)
+    contours = [contour for contour in contours if cv2.contourArea(contour) >= 25]
+
+    if contours:
+        max_contours = max(contours, key=cv2.contourArea)
+        dist = cv2.pointPolygonTest(max_contours, (w // 2, h - 1), True)
+
+        dist_abs = np.abs(dist)
+        print(dist_abs)
+
+        if dist_abs < 100:
+            red_s = True
+        else:
+            red_s = False
+    else:
+        red_s = False
     
     if key_handler[key.F]:
         if not s_v_image:
@@ -213,9 +333,9 @@ def update(dt):
     writer.write(bgr_image)
     
     hsv_image=cv2.cvtColor(obs, cv2.COLOR_RGB2HSV)
-    lower=np.array([20,100,100])
-    upper=np.array([30,255,255])
-    mask_yellow=cv2.inRange(hsv_image,lower,upper)
+    lower_y=np.array([20,100,100])
+    upper_y=np.array([30,255,255])
+    mask_yellow=cv2.inRange(hsv_image,lower_y,upper_y)
     bgr_image1=cv2.cvtColor(mask_yellow, cv2.COLOR_GRAY2BGR)
     writer_y.write(bgr_image1)
 
@@ -229,7 +349,7 @@ def update(dt):
     if boolcam == True:
         env.render("human")
     else:
-        env.render("top_down") #idk how to switch
+        env.render("top_down")
 
 pyglet.clock.schedule_interval(update, 1.0 / env.unwrapped.frame_rate)
 
