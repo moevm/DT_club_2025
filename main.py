@@ -1,6 +1,5 @@
 import cv2
 import argparse
-import sys
 
 import gym
 import numpy as np
@@ -10,8 +9,37 @@ from pyglet.window import key
 from gym_duckietown.envs import DuckietownEnv
 
 
-# MOVEMENT
-speed = 0.44
+writer = cv2.VideoWriter(
+    "output.mp4",
+    cv2.VideoWriter_fourcc(*"mp4v"),
+    20,
+    (640, 480),
+)
+
+writer_yellow = cv2.VideoWriter(
+    "output_markup_yel.mp4",
+    cv2.VideoWriter_fourcc(*"mp4v"),
+    20,
+    (640, 480),
+)
+
+
+# Константы скоростей
+SPEED_FORWARD = np.array([0.44, 0.0])
+SPEED_BACKWARD = np.array([-0.44, 0.0])
+SPEED_LEFT = np.array([0.0, 1.0])
+SPEED_RIGHT = np.array([0.0, -1.0])
+SPEED_BOOST_MULTIPLIER = 1.5
+
+# Константы для остановки у красной линии
+RED_STOP_DISTANCE = 150
+RED_MIN_CONTOUR_AREA = 25
+RED_STOP_SECONDS = 3.0
+RED_IGNORE_SECONDS = 2.0
+
+RENDER_PARAMS = ["human", "top_down"]
+current_render_params = RENDER_PARAMS[0]
+
 
 # python3 main.py --map-name=udem1
 parser = argparse.ArgumentParser()
@@ -19,23 +47,14 @@ parser.add_argument("--env-name", default="Duckietown-udem1-v0")
 parser.add_argument("--map-name", default="udem1")
 parser.add_argument("--distortion", default=False, action="store_true")
 parser.add_argument("--camera_rand", default=False, action="store_true")
-parser.add_argument(
-    "--draw-curve", action="store_true", help="draw the lane following curve"
-)
-parser.add_argument(
-    "--draw-bbox", action="store_true", help="draw collision detection bounding boxes"
-)
-parser.add_argument(
-    "--domain-rand", action="store_true", help="enable domain randomization"
-)
-parser.add_argument(
-    "--dynamics_rand", action="store_true", help="enable dynamics randomization"
-)
-parser.add_argument(
-    "--frame-skip", default=1, type=int, help="number of frames to skip"
-)
+parser.add_argument("--draw-curve", action="store_true", help="draw the lane following curve")
+parser.add_argument("--draw-bbox", action="store_true", help="draw collision detection bounding boxes")
+parser.add_argument("--domain-rand", action="store_true", help="enable domain randomization")
+parser.add_argument("--dynamics_rand", action="store_true", help="enable dynamics randomization")
+parser.add_argument("--frame-skip", default=1, type=int, help="number of frames to skip")
 parser.add_argument("--seed", default=42, type=int, help="seed")
 args = parser.parse_args()
+
 
 if args.env_name and args.env_name.find("Duckietown") != -1:
     env = DuckietownEnv(
@@ -55,269 +74,256 @@ else:
 env.reset()
 env.render()
 
-def move_to_target(current_angle, target, delta = 3):
-    action = [0, 0]
-    angle_deg = np.rad2deg(current_angle)
-    # угол в [-180, 180]
-    angle_deg = ((angle_deg + 180) % 360) - 180
-    
-    if abs(angle_deg - target) <= delta:
-        return action
-    
-    # Определение направления кратчайшего пути
-    difference = (target - angle_deg + 180) % 360 - 180
-    action = [0, speed if difference > 0 else -speed]
-    
-    return action
- 
-def move_down(current_angle):
-    return move_to_target(current_angle, -90)
-
-def move_up(current_angle):
-    return move_to_target(current_angle, 90)
 
 def move_right(current_angle):
-    return move_to_target(current_angle, 0)
+    global is_move_right
+
+    action = np.array([0.0, 0.0])
+
+    angle_deg = np.rad2deg(current_angle)
+    delta = 5
+
+    if -delta <= angle_deg <= delta:
+        is_move_right = False
+    else:
+        if 0 < angle_deg <= 180:
+            action = SPEED_RIGHT
+        elif -180 <= angle_deg <= 0:
+            action = SPEED_LEFT
+
+    return action
+
 
 def move_left(current_angle):
-    return move_to_target(current_angle, 180)
+    global is_move_left
+
+    action = np.array([0.0, 0.0])
+
+    angle_deg = np.rad2deg(current_angle)
+    delta = 5
+
+    if (angle_deg > 0 and angle_deg >= 180 - delta) or (
+        angle_deg < 0 and angle_deg <= -180 + delta
+    ):
+        is_move_left = False
+    else:
+        if 0 <= angle_deg < 180:
+            action = SPEED_LEFT
+        elif -180 <= angle_deg < 0:
+            action = SPEED_RIGHT
+
+    return action
 
 
-RENDER_PARAMS = ["human", "top_down"]
+def move_forward(current_angle):
+    global is_move_forward
 
-writer = cv2.VideoWriter( 
-    "output.mp4",
-    cv2.VideoWriter_fourcc(*"mp4v"),
-    20,
-    (640, 480), #(width, height) (столбцы, строки)
-)
+    action = np.array([0.0, 0.0])
 
-writer_yellow = cv2.VideoWriter( 
-    "output_markup_yel.mp4",
-    cv2.VideoWriter_fourcc(*"mp4v"),
-    20,
-    (640, 480), #(width, height) (столбцы, строки)
-)
+    angle_deg = np.rad2deg(current_angle)
+    delta = 5
 
-view_mode = RENDER_PARAMS[0]
-tap_move_right = False
-tap_move_left = False
-tap_move_up = False
-tap_move_down = False
-is_view_image = False
-red_stop = False
-ignore_red_stop = False
-last_steering = 0
+    if 90 - delta <= angle_deg <= 90 + delta:
+        is_move_forward = False
+    else:
+        if -90 <= angle_deg <= 90:
+            action = SPEED_LEFT
+        else:
+            action = SPEED_RIGHT
+
+    return action
+
+
+def move_back(current_angle):
+    global is_move_back
+
+    action = np.array([0.0, 0.0])
+
+    angle_deg = np.rad2deg(current_angle)
+    delta = 5
+
+    if -90 - delta <= angle_deg <= -90 + delta:
+        is_move_back = False
+    else:
+        if angle_deg > -90:
+            if angle_deg > 90:
+                action = SPEED_LEFT
+            else:
+                action = SPEED_RIGHT
+        else:
+            action = SPEED_LEFT
+
+    return action
 
 
 @env.unwrapped.window.event
 def on_key_press(symbol, modifiers):
-    """
-    This handler processes keyboard commands that
-    control the simulation
-    """
-    global tap_move_right, tap_move_left, tap_move_up, tap_move_down, view_mode, ignore_red_stop
+    global current_render_params
+
+    global is_move_right
+    global is_move_left
+    global is_move_forward
+    global is_move_back
+
+    global is_show_masks
+    global red_stop
+    global red_stop_timer
+    global red_ignore_timer
 
     if symbol == key.BACKSPACE or symbol == key.SLASH:
         print("RESET")
+        red_stop = False
+        red_stop_timer = 0.0
+        red_ignore_timer = 0.0
         env.reset()
         env.render()
+
     elif symbol == key.PAGEUP:
         env.unwrapped.cam_angle[0] = 0
 
     elif symbol == key.ESCAPE:
         writer.release()
         writer_yellow.release()
+        cv2.destroyAllWindows()
         env.close()
-        sys.exit(0)
+        pyglet.app.exit()
 
-    elif key_handler[key.TAB]:
-        view_mode = RENDER_PARAMS[1] if view_mode == RENDER_PARAMS[0] else RENDER_PARAMS[0]
-
-    elif symbol == key.RIGHT:
-        tap_move_right = True
-        tap_move_left = False
-        tap_move_up = False
-        tap_move_down = False
-    elif symbol == key.LEFT:
-        tap_move_right = False
-        tap_move_left = True
-        tap_move_up = False
-        tap_move_down = False
-    elif symbol == key.UP:
-        tap_move_right = False
-        tap_move_left = False
-        tap_move_up = True
-        tap_move_down = False
-    elif symbol == key.DOWN:
-        tap_move_right = False
-        tap_move_left = False
-        tap_move_up = False
-        tap_move_down = True
+    elif symbol == key.TAB:
+        if current_render_params == RENDER_PARAMS[0]:
+            current_render_params = RENDER_PARAMS[1]
+        else:
+            current_render_params = RENDER_PARAMS[0]
 
     elif symbol == key.F:
-        is_view_image = True
-    
-    #остановка на красный цвет
-    elif symbol == key.I:
-        ignore_red_stop = True
+        is_show_masks = not is_show_masks
+
+        if not is_show_masks:
+            cv2.destroyAllWindows()
+
     elif symbol == key.J:
-        ignore_red_stop = False
+        is_move_left = True
+
+    elif symbol == key.I:
+        is_move_forward = True
+
+    elif symbol == key.L:
+        is_move_right = True
+
+    elif symbol == key.K:
+        is_move_back = True
+
 
 # Register a keyboard handler
 key_handler = key.KeyStateHandler()
 env.unwrapped.window.push_handlers(key_handler)
 
 
-def get_bot_image(obs):
+def filter_small_contours(contours, min_contour_area):
+    filtered = []
 
-    bgr_image = cv2.cvtColor(obs, cv2.COLOR_RGB2BGR)
+    for contour in contours:
+        if cv2.contourArea(contour) >= min_contour_area:
+            filtered.append(contour)
 
-    hsv_image = cv2.cvtColor(obs, cv2.COLOR_RGB2HSV)
+    return filtered
 
-    lower_yellow = np.array([20, 100, 100])
-    upper_yellow = np.array([30, 255, 255])
-    mask_yellow = cv2.inRange(hsv_image, lower_yellow, upper_yellow)
-    hsv2rgb_yel_image = cv2.cvtColor(mask_yellow, cv2.COLOR_GRAY2RGB)
 
-    lower_gray = np.array([160, 160, 160])
-    upper_gray = np.array([200, 200, 200])
-    mask_gray = cv2.inRange(obs, lower_gray, upper_gray)
+def get_yellow_mask(hsv_image):
+    lower = np.array([20, 100, 100])
+    upper = np.array([30, 255, 255])
+    return cv2.inRange(hsv_image, lower, upper)
 
-    '''
-    lower_red_1 = np.array([0, 120, 70])
-    upper_red_1 = np.array([10, 255, 255])
-    lower_red_2 = np.array([160, 120, 70])
-    upper_red_2 = np.array([180, 255, 255])
-    mask_red_1 = cv2.inRange(hsv_image, lower_red_1, upper_red_1)
-    mask_red_2 = cv2.inRange(hsv_image, lower_red_2, upper_red_2)
-    mask_red = cv2.bitwise_or(mask_red_1, mask_red_2)
-    hsv2rgb_red_image = cv2.cvtColor(mask_red, cv2.COLOR_GRAY2RGB)
-    '''
 
-    cv2.imshow("camera image view", bgr_image)
-    cv2.imshow("gray2rgb", hsv2rgb_yel_image)
-    cv2.imshow("hsv format", hsv_image)
-    cv2.imshow("gray mask", mask_gray)
-    '''
-    cv2.imshow("red mask", hsv2rgb_red_image)
+def get_grey_mask(rgb_image):
+    grey_lower = np.array([160, 160, 160])
+    grey_upper = np.array([200, 200, 200])
+    return cv2.inRange(rgb_image, grey_lower, grey_upper)
 
-    h,  w = obs.shape[0], obs.shape[1]
-    mask_red[0:h//2, :] = 0
 
-    contours, _ = cv2.findContours(image=mask_red, mode=cv2.RETR_EXTERNAL, method=cv2.CHAIN_APPROX_SIMPLE)
-    contours = [contour for contour in contours if cv2.contourArea(contour) >= 25]
-    image_with_contours = cv2.drawContours(image=bgr_image.copy(), contours=contours, contourIdx=-1, color=(0, 255, 0), thickness = 3)
+def get_red_mask(hsv_image):
+    lower_red1 = np.array([0, 120, 70])
+    upper_red1 = np.array([10, 255, 255])
 
-    max_contours = max(contours, key=cv2.contourArea)
-    dist = cv2.pointPolygonTest(max_contours, (w // 2, h - 1), True)
+    lower_red2 = np.array([170, 120, 70])
+    upper_red2 = np.array([179, 255, 255])
 
-    print(np.abs(dist))
+    mask1 = cv2.inRange(hsv_image, lower_red1, upper_red1)
+    mask2 = cv2.inRange(hsv_image, lower_red2, upper_red2)
 
-    cv2.imshow("red mask", mask_red)
-    cv2.imshow('red contours', image_with_contours)
-    '''
+    return cv2.bitwise_or(mask1, mask2)
 
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+
+def get_filtered_contours(mask, min_contour_area):
+    contours, _ = cv2.findContours(
+        mask,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE,
+    )
+
+    return filter_small_contours(contours, min_contour_area)
+
+
+def is_red_line_close(mask_red):
+    h, w = mask_red.shape[:2]
+
+    mask = mask_red.copy()
+    mask[0:h // 2, :] = 0
+
+    contours = get_filtered_contours(mask, RED_MIN_CONTOUR_AREA)
+
+    if not contours:
+        return False
+
+    max_contour = max(contours, key=cv2.contourArea)
+
+    distance = cv2.pointPolygonTest(max_contour, (w // 2, h - 1), True)
+    distance_abs = abs(distance)
+
+    print("red line distance =", distance_abs)
+
+    return distance_abs < RED_STOP_DISTANCE
 
 
 def lane_follow(obs):
-
     global last_steering
 
     h, w = obs.shape[:2]
-    hsv_image = cv2.cvtColor(obs,cv2.COLOR_RGB2HSV)
-    
+    hsv_image = cv2.cvtColor(obs, cv2.COLOR_RGB2HSV)
 
-    mask_yellow = cv2.inRange(
-        hsv_image[h // 2 : h - 1, :], np.array([20, 100, 100]), np.array([30, 255, 255])
-    )
-    mask_gray = cv2.inRange(
-        hsv_image[h // 2 : h - 1, :], np.array([0, 0, 120]), np.array([180, 80, 255])
+    mask = cv2.inRange(
+        hsv_image[h // 2:h - 1, :],
+        np.array([20, 100, 100]),
+        np.array([30, 255, 255]),
     )
 
-    
-    contours_yellow, _ = cv2.findContours(mask_yellow, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-    contours_gray, _ = cv2.findContours(mask_gray, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    contours, _ = cv2.findContours(
+        mask,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_NONE,
+    )
 
-    contours_yellow = [contour for contour in contours_yellow if cv2.contourArea(contour) > 10]
-    contours_gray = [contour for contour in contours_gray if cv2.contourArea(contour) > 10]
+    contours = [
+        contour for contour in contours
+        if cv2.contourArea(contour) > 10
+    ]
 
-
-
-    steering_angle = 0
-    
-    if contours_yellow and contours_gray:
-        #фильтр контуров 
-        
-
-        x1, x2 = None, None
-
-        all_x_yellow = []
-        for contour in contours_yellow:
-            for point in contour:
-                all_x_yellow.append(point[0][0])
-        x1 = np.median(all_x_yellow)
-
-
-
-            # largest_contour_yellow = max(contours_yellow, key=cv2.contourArea) #контур с самой большой площадью
-            # # 1 по всем точкам контуров
-            # M = cv2.moments(largest_contour_yellow)
-            # if M["m00"] != 0:
-            #    x1 = int(M["m10"] / M["m00"])
-
-        largest_contour_gray = max(contours_gray, key=cv2.contourArea) #контур с самой большой площадью
-        # 1 по всем точкам контуров
-        M = cv2.moments(largest_contour_gray)
-        if M["m00"] != 0:
-            x2 = int(M["m10"] / M["m00"])
-
-
-            line_center_x = (x1 + x2) / 2
-            deviation = - (line_center_x - w * 0.5) / (w * 0.5)
-            steering_angle = deviation * 1 
-            print(steering_angle)
-
-            if steering_angle > 0:
-                last_steering = 1
-            elif steering_angle < 0:
-                last_steering = -1
-            else:
-                last_steering = 0
-
-    elif contours_gray and not contours_yellow:
-        steering_angle = 1
-    elif contours_yellow and not contours_gray:
-        steering_angle = -1
-    else:
-        if last_steering == 1:
-            steering_angle = 1
-        elif last_steering == -1:
-            steering_angle = -1
-        else:
-            steering_angle = 0
-        
-    #фильтрация пикселей
-    #contours = [contour for contour in contours if cv2.contourArea(contour) > 10]
-    '''
     lx = None
+
     if contours:
         largest_contour = max(contours, key=cv2.contourArea)
-        M = cv2.moments(largest_contour)
-        if M["m00"] != 0:
-            lx = int(M["m10"] / M["m00"])
+        moments = cv2.moments(largest_contour)
+
+        if moments["m00"] != 0:
+            lx = int(moments["m10"] / moments["m00"])
 
             center_x = w / 2
             deviation = center_x - lx
+
             if deviation > 0:
                 last_steering = 1
             else:
                 last_steering = -1
 
-
-    steering_angle = 0.0
     if lx is not None:
         center_x = w / 2
         deviation = center_x - lx
@@ -329,126 +335,157 @@ def lane_follow(obs):
             steering_angle = -1.0
         else:
             steering_angle = 0.0
-    '''
-            
-    #cv2.imshow('mask gray', mask_gray)
-    #cv2.imshow('mask yellow', mask_yellow)
-    #cv2.waitKey(0)
-    #cv2.destroyAllWindows()
 
     return steering_angle
 
-def update(dt):
-    """
-    This function is called at every frame to handle
-    movement/stepping and redrawing
-    """
 
-    global red_stop, is_view_image
+def draw_contours_on_image(rgb_image, contours):
+    result = cv2.cvtColor(rgb_image, cv2.COLOR_RGB2BGR)
+    cv2.drawContours(result, contours, -1, (0, 255, 100), 2)
+    return result
+
+
+def process_bot_image(obs):
+    bgr_image = cv2.cvtColor(obs, cv2.COLOR_RGB2BGR)
+    hsv_image = cv2.cvtColor(obs, cv2.COLOR_RGB2HSV)
+
+    mask_yellow = get_yellow_mask(hsv_image)
+    mask_grey = get_grey_mask(obs)
+    mask_red = get_red_mask(hsv_image)
+
+    red_contours = get_filtered_contours(mask_red, 50)
+    result_contours = draw_contours_on_image(obs, red_contours)
+
+    return bgr_image, hsv_image, mask_yellow, mask_grey, mask_red, result_contours
+
+
+def show_bot_images(bgr_image, hsv_image, mask_yellow, mask_grey, mask_red, result_contours):
+    cv2.imshow("camera image view", bgr_image)
+    cv2.imshow("hsv format", hsv_image)
+    cv2.imshow("red mask", mask_red)
+    cv2.imshow("yellow mask", mask_yellow)
+    cv2.imshow("grey mask", mask_grey)
+    cv2.imshow("red contours", result_contours)
+
+    cv2.waitKey(1)
+
+
+is_move_right = False
+is_move_left = False
+is_move_forward = False
+is_move_back = False
+
+is_show_masks = False
+
+red_stop = False
+red_stop_timer = 0.0
+red_ignore_timer = 0.0
+
+last_steering = 0
+
+
+def update(dt):
+    global current_render_params
+
+    global is_move_right
+    global is_move_left
+    global is_move_forward
+    global is_move_back
+
+    global red_stop
+    global red_stop_timer
+    global red_ignore_timer
 
     action = np.array([0.0, 0.0])
 
     if key_handler[key.W]:
-        # [-1, 1] - |+-1|: максимальная скорость (~0.30м/c)
-        # 1 -> 0 : 0.5 (~ в 2 раза меньше скорость!)
-        action += np.array([speed, 0])
-    if key_handler[key.S]: 
-        action -= np.array([speed, 0])
+        action += SPEED_FORWARD
+
+    if key_handler[key.S]:
+        action += SPEED_BACKWARD
+
     if key_handler[key.A]:
-        action += np.array([0, 1])
+        action += SPEED_LEFT
+
     if key_handler[key.D]:
-        action += np.array([0, -1])
+        action += SPEED_RIGHT
+
     if key_handler[key.SPACE]:
-        action = np.array([0, 0])
+        action = np.array([0.0, 0.0])
 
-    if tap_move_right:
-        action = move_right(env.cur_angle)
-    if tap_move_left:
-        action = move_left(env.cur_angle)
-    if tap_move_up:
-        action = move_up(env.cur_angle)
-    if tap_move_down:
-        action = move_down(env.cur_angle)
-
-    # Speed boost
     if key_handler[key.LSHIFT]:
-        action *= 1.5
+        action *= SPEED_BOOST_MULTIPLIER
 
+    if is_move_right:
+        action = move_right(env.cur_angle)
 
+    if is_move_left:
+        action = move_left(env.cur_angle)
+
+    if is_move_forward:
+        action = move_forward(env.cur_angle)
+
+    if is_move_back:
+        action = move_back(env.cur_angle)
+
+    # Следование по желтой разметке при зажатии X
     if key_handler[key.X]:
-        obs = env.render_obs()
-        steering_angle = lane_follow(obs)
-        action += np.array([speed / 2, steering_angle])
+        obs_for_lane = env.render_obs()
+        steering_angle = lane_follow(obs_for_lane)
+        action += np.array([SPEED_FORWARD[0] / 2, steering_angle])
 
-    if red_stop and not ignore_red_stop:
-        action = np.array([0, 0])
+    # Если сейчас идет остановка на красной линии — стоим
+    if red_stop:
+        action = np.array([0.0, 0.0])
 
-    obs, reward, done, info = env.step(action) # -> return as RGB format
+    obs, reward, _, _ = env.step(action)
 
-    h,  w = obs.shape[0], obs.shape[1]
+    bgr_image, hsv_image, mask_yellow, mask_grey, mask_red, result_contours = process_bot_image(obs)
 
-    hsv_image = cv2.cvtColor(obs, cv2.COLOR_RGB2HSV)
+    red_line_close = is_red_line_close(mask_red)
 
-    lower_red_1 = np.array([0, 120, 70])
-    upper_red_1 = np.array([10, 255, 255])
-    lower_red_2 = np.array([160, 120, 70])
-    upper_red_2 = np.array([180, 255, 255])
-    mask_red_1 = cv2.inRange(hsv_image, lower_red_1, upper_red_1)
-    mask_red_2 = cv2.inRange(hsv_image, lower_red_2, upper_red_2)
-    mask_red = cv2.bitwise_or(mask_red_1, mask_red_2)
+    if red_stop:
+        red_stop_timer += dt
 
-    mask_red[0:h//2, :] = 0
-
-    contours, _ = cv2.findContours(image=mask_red, mode=cv2.RETR_EXTERNAL, method=cv2.CHAIN_APPROX_SIMPLE)
-    contours = [contour for contour in contours if cv2.contourArea(contour) >= 25]
-
-    if not ignore_red_stop:
-        if contours:
-            max_contours = max(contours, key=cv2.contourArea)
-            dist = cv2.pointPolygonTest(max_contours, (w // 2, h - 1), True)
-
-            dist_abs = np.abs(dist)
-            print(dist_abs)
-
-            if dist_abs < 150:
-                red_stop = True
-            else:
-                red_stop = False
-        else:
+        if red_stop_timer >= RED_STOP_SECONDS:
             red_stop = False
-    else:
-        red_stop = False
+            red_stop_timer = 0.0
+            red_ignore_timer = RED_IGNORE_SECONDS
 
+    elif red_ignore_timer > 0:
+        red_ignore_timer -= dt
 
+        if red_ignore_timer < 0:
+            red_ignore_timer = 0.0
 
-    if key_handler[key.F]:
-        if not is_view_image:
-            get_bot_image(obs)
-            is_view_image = True
-        else:
-            is_view_image = False
-    # obs - картинка (в виде трехмерной матрицы)
-    # done = True|False
-    
-    print(obs.shape)
+    elif red_line_close:
+        red_stop = True
+        red_stop_timer = 0.0
+
+    if is_show_masks:
+        show_bot_images(
+            bgr_image,
+            hsv_image,
+            mask_yellow,
+            mask_grey,
+            mask_red,
+            result_contours,
+        )
+
     print("step_count = %s, reward=%.3f" % (env.unwrapped.step_count, reward))
     print("bot position = ", env.cur_pos)
-    print("bot angle_rad=", env.cur_angle)
-    print(f"bot angle_deg=", np.rad2deg(env.cur_angle))
+    print("obs shape =", obs.shape)
+    print("red_stop =", red_stop)
+    print("red_stop_timer =", red_stop_timer)
+    print("red_ignore_timer =", red_ignore_timer)
+    print("last_steering =", last_steering)
 
-    hsv_image = cv2.cvtColor(obs, cv2.COLOR_RGB2HSV)
+    yellow_bgr = cv2.cvtColor(mask_yellow, cv2.COLOR_GRAY2BGR)
 
-    lower_yellow = np.array([20, 100, 100])
-    upper_yellow = np.array([30, 255, 255])
-    mask_yellow = cv2.inRange(hsv_image, lower_yellow, upper_yellow)
-    hsv2rgb_yel_image = cv2.cvtColor(mask_yellow, cv2.COLOR_GRAY2RGB)
-
-    writer_yellow.write(hsv2rgb_yel_image)
-
-    bgr_image = cv2.cvtColor(obs,cv2.COLOR_BGR2RGB)
+    writer_yellow.write(yellow_bgr)
     writer.write(bgr_image)
 
-    env.render(view_mode)
+    env.render(current_render_params)
 
 
 pyglet.clock.schedule_interval(update, 1.0 / env.unwrapped.frame_rate)
