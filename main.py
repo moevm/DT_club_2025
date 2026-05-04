@@ -210,7 +210,7 @@ def update(dt):
     if key_handler[key.D]:
         action += SPEED_RIGHT
     if key_handler[key.SPACE]:
-        action = np.array([0, 0])
+        action = np.array([0.0, 0.0])
 
     # Speed boost
     if key_handler[key.LSHIFT]:
