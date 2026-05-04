@@ -1,6 +1,5 @@
 import cv2
 import argparse
-import sys
 
 import gym
 import numpy as np
@@ -142,10 +141,6 @@ def move_back(current_angle):
 
 @env.unwrapped.window.event
 def on_key_press(symbol, modifiers):
-    """
-    This handler processes keyboard commands that
-    control the simulation
-    """
     global current_render_params
 
     global is_move_right
@@ -153,34 +148,38 @@ def on_key_press(symbol, modifiers):
     global is_move_forward
     global is_move_back
 
+    global is_show_masks
+
     if symbol == key.BACKSPACE or symbol == key.SLASH:
         print("RESET")
         env.reset()
         env.render()
+
     elif symbol == key.PAGEUP:
         env.unwrapped.cam_angle[0] = 0
 
     elif symbol == key.ESCAPE:
-        writer.release()
-        writer_yellow.release()
-        env.close()
-        sys.exit(0)
+        pyglet.app.exit()
 
-    # Смена вида камеры на TAB
-    elif key_handler[key.TAB]:
+    elif symbol == key.TAB:
         if current_render_params == RENDER_PARAMS[0]:
             current_render_params = RENDER_PARAMS[1]
-        elif current_render_params == RENDER_PARAMS[1]:
+        else:
             current_render_params = RENDER_PARAMS[0]
 
-    # Автоматический поворот на JILK
-    elif key_handler[key.J]:
+    elif symbol == key.F:
+        is_show_masks = not is_show_masks
+
+        if not is_show_masks:
+            cv2.destroyAllWindows()
+
+    elif symbol == key.J:
         is_move_left = True
-    elif key_handler[key.I]:
+    elif symbol == key.I:
         is_move_forward = True
-    elif key_handler[key.L]:
+    elif symbol == key.L:
         is_move_right = True
-    elif key_handler[key.K]:
+    elif symbol == key.K:
         is_move_back = True
 
 
@@ -249,9 +248,7 @@ def process_bot_image(obs):
     return bgr_image, hsv_image, mask_yellow, mask_grey, mask_red, result_contours
 
 
-def get_bot_image(obs):
-    bgr_image, hsv_image, mask_yellow, mask_grey, mask_red, result_contours = process_bot_image(obs)
-
+def show_bot_images(bgr_image, hsv_image, mask_yellow, mask_grey, mask_red, result_contours):
     cv2.imshow("camera image view", bgr_image)
     cv2.imshow("hsv format", hsv_image)
     cv2.imshow("red mask", mask_red)
@@ -266,22 +263,17 @@ is_move_right = False
 is_move_left = False
 is_move_forward = False
 is_move_back = False
-is_view_image = False
+
+is_show_masks = False
 
 
 def update(dt):
-    """
-    This function is called at every frame to handle
-    movement/stepping and redrawing
-    """
     global current_render_params
 
     global is_move_right
     global is_move_left
     global is_move_forward
     global is_move_back
-
-    global is_view_image
 
     action = np.array([0.0, 0.0])
 
@@ -295,7 +287,7 @@ def update(dt):
         action += SPEED_RIGHT
     if key_handler[key.SPACE]:
         action = np.array([0.0, 0.0])
-    # Speed boost
+
     if key_handler[key.LSHIFT]:
         action *= SPEED_BOOST_MULTIPLIER
 
@@ -309,14 +301,18 @@ def update(dt):
         action = move_back(env.cur_angle)
 
     obs, reward, _, _ = env.step(action)
+
     bgr_image, hsv_image, mask_yellow, mask_grey, mask_red, result_contours = process_bot_image(obs)
 
-    if key_handler[key.F]:
-        if not is_view_image:
-            get_bot_image(obs)
-            is_view_image = True
-    else:
-        is_view_image = False
+    if is_show_masks:
+        show_bot_images(
+            bgr_image,
+            hsv_image,
+            mask_yellow,
+            mask_grey,
+            mask_red,
+            result_contours,
+        )
 
     print("step_count = %s, reward=%.3f" % (env.unwrapped.step_count, reward))
     print("bot position = ", env.cur_pos)
