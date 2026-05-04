@@ -9,6 +9,19 @@ from pyglet.window import key
 
 from gym_duckietown.envs import DuckietownEnv
 
+writer = cv2.VideoWriter(
+    "output.mp4",
+    cv2.VideoWriter_fourcc(*"mp4v"),
+    20,
+    (640, 480),
+)
+writer_yellow = cv2.VideoWriter(
+    "output_markup_yel.mp4",
+    cv2.VideoWriter_fourcc(*"mp4v"),
+    20,
+    (640, 480),
+)
+
 # Константы скоростей
 SPEED_FORWARD = np.array([0.44, 0.0])
 SPEED_BACKWARD = np.array([-0.44, 0])
@@ -25,21 +38,11 @@ parser.add_argument("--env-name", default="Duckietown-udem1-v0")
 parser.add_argument("--map-name", default="udem1")
 parser.add_argument("--distortion", default=False, action="store_true")
 parser.add_argument("--camera_rand", default=False, action="store_true")
-parser.add_argument(
-    "--draw-curve", action="store_true", help="draw the lane following curve"
-)
-parser.add_argument(
-    "--draw-bbox", action="store_true", help="draw collision detection bounding boxes"
-)
-parser.add_argument(
-    "--domain-rand", action="store_true", help="enable domain randomization"
-)
-parser.add_argument(
-    "--dynamics_rand", action="store_true", help="enable dynamics randomization"
-)
-parser.add_argument(
-    "--frame-skip", default=1, type=int, help="number of frames to skip"
-)
+parser.add_argument("--draw-curve", action="store_true", help="draw the lane following curve")
+parser.add_argument("--draw-bbox", action="store_true", help="draw collision detection bounding boxes")
+parser.add_argument("--domain-rand", action="store_true", help="enable domain randomization")
+parser.add_argument("--dynamics_rand", action="store_true", help="enable dynamics randomization")
+parser.add_argument("--frame-skip", default=1, type=int, help="number of frames to skip")
 parser.add_argument("--seed", default=42, type=int, help="seed")
 args = parser.parse_args()
 
@@ -60,6 +63,7 @@ else:
 
 env.reset()
 env.render()
+
 
 def move_right(current_angle):
     global is_move_right
@@ -135,6 +139,7 @@ def move_back(current_angle):
 
     return action
 
+
 @env.unwrapped.window.event
 def on_key_press(symbol, modifiers):
     """
@@ -154,18 +159,21 @@ def on_key_press(symbol, modifiers):
         env.render()
     elif symbol == key.PAGEUP:
         env.unwrapped.cam_angle[0] = 0
+
     elif symbol == key.ESCAPE:
-        env.close() 
+        writer.release()
+        writer_yellow.release()
+        env.close()
         sys.exit(0)
-        
+
     # Смена вида камеры на TAB
     elif key_handler[key.TAB]:
-        if current_render_params == RENDER_PARAMS[0]: 
+        if current_render_params == RENDER_PARAMS[0]:
             current_render_params = RENDER_PARAMS[1]
-        elif current_render_params == RENDER_PARAMS[1]: 
+        elif current_render_params == RENDER_PARAMS[1]:
             current_render_params = RENDER_PARAMS[0]
 
-    #Автоматический поворот на JILK
+    # Автоматический поворот на JILK
     elif key_handler[key.J]:
         is_move_left = True
     elif key_handler[key.I]:
@@ -175,10 +183,36 @@ def on_key_press(symbol, modifiers):
     elif key_handler[key.K]:
         is_move_back = True
 
+    elif key_handler[key.TAB]:
+        view_mode = RENDER_PARAMS[1] if view_mode == RENDER_PARAMS[0] else RENDER_PARAMS[0]
 
 # Register a keyboard handler
 key_handler = key.KeyStateHandler()
 env.unwrapped.window.push_handlers(key_handler)
+
+
+def get_bot_image(obs):
+
+    to_show = cv2.cvtColor(obs, cv2.COLOR_RGB2BGR)
+
+    hsv_image = cv2.cvtColor(obs, cv2.COLOR_RGB2HSV)
+
+    lower_yellow = np.array([20, 100, 100])
+    upper_yellow = np.array([30, 255, 255])
+    mask_yellow = cv2.inRange(hsv_image, lower_yellow, upper_yellow)
+    hsv2rgb_yel_image = cv2.cvtColor(mask_yellow, cv2.COLOR_GRAY2RGB)
+
+    lower_gray = np.array([160, 160, 160])
+    upper_gray = np.array([200, 200, 200])
+    mask_gray = cv2.inRange(obs, lower_gray, upper_gray)
+
+    cv2.imshow("gray2rgb", hsv2rgb_yel_image)
+    cv2.imshow("camera image view", to_show)
+    cv2.imshow("hsv format", hsv_image)
+    cv2.imshow("yellow mask", mask_yellow)
+    cv2.imshow("gray mask", mask_gray)
+
+    cv2.waitKey(0)
 
 is_move_right = False
 is_move_left = False
@@ -197,13 +231,13 @@ def update(dt):
     global is_move_forward
     global is_move_back
 
+    global is_view_image
+
     action = np.array([0.0, 0.0])
 
     if key_handler[key.W]:
-        # [-1, 1] - |+-1|: максимальная скорость (~0.30м/c)
-        # 1 -> 0 : 0.5 (~ в 2 раза меньше скорость!)
         action += SPEED_FORWARD
-    if key_handler[key.S]: 
+    if key_handler[key.S]:
         action += SPEED_BACKWARD
     if key_handler[key.A]:
         action += SPEED_LEFT
@@ -211,29 +245,48 @@ def update(dt):
         action += SPEED_RIGHT
     if key_handler[key.SPACE]:
         action = np.array([0.0, 0.0])
-
     # Speed boost
     if key_handler[key.LSHIFT]:
         action *= SPEED_BOOST_MULTIPLIER
 
     if is_move_right:
-        action  = move_right(env.cur_angle)
+        action = move_right(env.cur_angle)
     if is_move_left:
-        action  = move_left(env.cur_angle)
+        action = move_left(env.cur_angle)
     if is_move_forward:
-        action  = move_forward(env.cur_angle)
+        action = move_forward(env.cur_angle)
     if is_move_back:
-        action  = move_back(env.cur_angle)
+        action = move_back(env.cur_angle)
 
+    obs, reward, _, _ = env.step(action)
 
-    obs, reward, done, info = env.step(action)
-    # obs - картинка (в виде трехмерной матрицы)
-    # done = True|False
-    
+    if key_handler[key.F]:
+        if not is_view_image:
+            get_bot_image(obs)
+            is_view_image = True
+        else:
+            is_view_image = False
+
+    print(obs.shape)
     print("step_count = %s, reward=%.3f" % (env.unwrapped.step_count, reward))
     print("bot position = ", env.cur_pos)
+    print("bot angle_rad=", env.cur_angle)
+    print(f"bot angle_deg=", np.rad2deg(env.cur_angle))
+
+    hsv_image = cv2.cvtColor(obs, cv2.COLOR_RGB2HSV)
+
+    lower_yellow = np.array([20, 100, 100])
+    upper_yellow = np.array([30, 255, 255])
+    mask_yellow = cv2.inRange(hsv_image, lower_yellow, upper_yellow)
+    hsv2rgb_yel_image = cv2.cvtColor(mask_yellow, cv2.COLOR_GRAY2RGB)
+
+    writer_yellow.write(hsv2rgb_yel_image)
+
+    bgr_image = cv2.cvtColor(obs, cv2.COLOR_BGR2RGB)
+    writer.write(bgr_image)
 
     env.render(current_render_params)
+
 
 pyglet.clock.schedule_interval(update, 1.0 / env.unwrapped.frame_rate)
 
