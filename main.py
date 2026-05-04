@@ -284,6 +284,61 @@ def is_red_line_close(mask_red):
     return distance_abs < RED_STOP_DISTANCE
 
 
+def lane_follow(obs):
+    global last_steering
+
+    h, w = obs.shape[:2]
+    hsv_image = cv2.cvtColor(obs, cv2.COLOR_RGB2HSV)
+
+    mask = cv2.inRange(
+        hsv_image[h // 2:h - 1, :],
+        np.array([20, 100, 100]),
+        np.array([30, 255, 255]),
+    )
+
+    contours, _ = cv2.findContours(
+        mask,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_NONE,
+    )
+
+    contours = [
+        contour for contour in contours
+        if cv2.contourArea(contour) > 10
+    ]
+
+    lx = None
+
+    if contours:
+        largest_contour = max(contours, key=cv2.contourArea)
+        moments = cv2.moments(largest_contour)
+
+        if moments["m00"] != 0:
+            lx = int(moments["m10"] / moments["m00"])
+
+            center_x = w / 2
+            deviation = center_x - lx
+
+            if deviation > 0:
+                last_steering = 1
+            else:
+                last_steering = -1
+
+    if lx is not None:
+        center_x = w / 2
+        deviation = center_x - lx
+        steering_angle = deviation / center_x
+    else:
+        if last_steering == 1:
+            steering_angle = 1.0
+        elif last_steering == -1:
+            steering_angle = -1.0
+        else:
+            steering_angle = 0.0
+
+    return steering_angle
+
+
 def draw_contours_on_image(rgb_image, contours):
     result = cv2.cvtColor(rgb_image, cv2.COLOR_RGB2BGR)
     cv2.drawContours(result, contours, -1, (0, 255, 100), 2)
@@ -326,7 +381,8 @@ red_stop = False
 red_stop_timer = 0.0
 red_ignore_timer = 0.0
 
-    return steering_angle
+last_steering = 0
+
 
 def update(dt):
     global current_render_params
@@ -372,6 +428,13 @@ def update(dt):
     if is_move_back:
         action = move_back(env.cur_angle)
 
+    # Следование по желтой разметке при зажатии X
+    if key_handler[key.X]:
+        obs_for_lane = env.render_obs()
+        steering_angle = lane_follow(obs_for_lane)
+        action += np.array([SPEED_FORWARD[0] / 2, steering_angle])
+
+    # Если сейчас идет остановка на красной линии — стоим
     if red_stop:
         action = np.array([0.0, 0.0])
 
@@ -415,6 +478,7 @@ def update(dt):
     print("red_stop =", red_stop)
     print("red_stop_timer =", red_stop_timer)
     print("red_ignore_timer =", red_ignore_timer)
+    print("last_steering =", last_steering)
 
     yellow_bgr = cv2.cvtColor(mask_yellow, cv2.COLOR_GRAY2BGR)
 
