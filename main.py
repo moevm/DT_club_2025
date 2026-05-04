@@ -9,11 +9,15 @@ from pyglet.window import key
 
 from gym_duckietown.envs import DuckietownEnv
 
-# SPEED_SETTINGS (ABS_MEANING!!!)
-CONST_UP_SPEED = np.array([0.44, 0.0])
-CONST_DOWN_SPEED = np.array([0.44, 0])
-CONST_LEFT_SPEED = np.array([0, 1])
-CONST_RIGHT_SPEED = np.array([0, 1])
+# Константы скоростей
+SPEED_FORWARD = np.array([0.44, 0.0])
+SPEED_BACKWARD = np.array([-0.44, 0])
+SPEED_LEFT = np.array([0, 1])
+SPEED_RIGHT = np.array([0, -1])
+SPEED_BOOST_MULTIPLIER = 1.5
+
+RENDER_PARAMS = ["human", "top_down"]
+current_render_params = RENDER_PARAMS[0]
 
 # python3 main.py --map-name=udem1
 parser = argparse.ArgumentParser()
@@ -64,6 +68,7 @@ def on_key_press(symbol, modifiers):
     This handler processes keyboard commands that
     control the simulation
     """
+    global current_render_params
 
     if symbol == key.BACKSPACE or symbol == key.SLASH:
         print("RESET")
@@ -72,41 +77,47 @@ def on_key_press(symbol, modifiers):
     elif symbol == key.PAGEUP:
         env.unwrapped.cam_angle[0] = 0
     elif symbol == key.ESCAPE:
-        env.close()
+        env.close() 
         sys.exit(0)
+        
+    # Смена вида камеры на TAB
+    elif key_handler[key.TAB]:
+        if current_render_params == RENDER_PARAMS[0]: 
+            current_render_params = RENDER_PARAMS[1]
+        elif current_render_params == RENDER_PARAMS[1]: 
+            current_render_params = RENDER_PARAMS[0]
 
 
 # Register a keyboard handler
 key_handler = key.KeyStateHandler()
 env.unwrapped.window.push_handlers(key_handler)
 
-
-RENDER_PARAMS = ["human", "top_down"]
-
 def update(dt):
     """
     This function is called at every frame to handle
     movement/stepping and redrawing
     """
+    global current_render_params
 
     action = np.array([0.0, 0.0])
 
     if key_handler[key.W]:
         # [-1, 1] - |+-1|: максимальная скорость (~0.30м/c)
         # 1 -> 0 : 0.5 (~ в 2 раза меньше скорость!)
-        action += CONST_UP_SPEED
+        action += SPEED_FORWARD
     if key_handler[key.S]: 
-        action -= CONST_DOWN_SPEED
+        action += SPEED_BACKWARD
     if key_handler[key.A]:
-        action += CONST_LEFT_SPEED
+        action += SPEED_LEFT
     if key_handler[key.D]:
-        action -= CONST_RIGHT_SPEED
+        action += SPEED_RIGHT
     if key_handler[key.SPACE]:
-        action = np.array([0, 0])
+        action = np.array([0.0, 0.0])
 
     # Speed boost
     if key_handler[key.LSHIFT]:
-        action *= 1.5
+        action *= SPEED_BOOST_MULTIPLIER
+
 
     obs, reward, done, info = env.step(action)
     # obs - картинка (в виде трехмерной матрицы)
@@ -115,9 +126,7 @@ def update(dt):
     print("step_count = %s, reward=%.3f" % (env.unwrapped.step_count, reward))
     print("bot position = ", env.cur_pos)
 
-    env.render("human")
-    if key_handler[key.TAB]:
-        env.render("top_down") #idk how to switch
+    env.render(current_render_params)
 
 pyglet.clock.schedule_interval(update, 1.0 / env.unwrapped.frame_rate)
 
