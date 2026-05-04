@@ -153,8 +153,6 @@ def on_key_press(symbol, modifiers):
     global is_move_forward
     global is_move_back
 
-    global camera_image
-
     if symbol == key.BACKSPACE or symbol == key.SLASH:
         print("RESET")
         env.reset()
@@ -261,30 +259,14 @@ def get_bot_image(obs):
     cv2.imshow("grey mask", mask_grey)
     cv2.imshow("red contours", result_contours)
 
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+    cv2.waitKey(1)
 
 
 is_move_right = False
 is_move_left = False
 is_move_forward = False
 is_move_back = False
-
 is_view_image = False
-
-writer_image = cv2.VideoWriter(
-    "output.mp4",
-    cv2.VideoWriter_fourcc(*"mp4v"),
-    20,
-    (640, 480),  # (witch, height)
-)
-
-writer_mask_yellow = cv2.VideoWriter(
-    "mask.mp4",
-    cv2.VideoWriter_fourcc(*"mp4v"),
-    20,
-    (640, 480),  # (witch, height)
-)
 
 
 def update(dt):
@@ -327,8 +309,6 @@ def update(dt):
         action = move_back(env.cur_angle)
 
     obs, reward, _, _ = env.step(action)
-
-    obs, reward, _, _ = env.step(action)
     bgr_image, hsv_image, mask_yellow, mask_grey, mask_red, result_contours = process_bot_image(obs)
 
     if key_handler[key.F]:
@@ -343,8 +323,8 @@ def update(dt):
     print(obs.shape)
 
     yellow_bgr = cv2.cvtColor(mask_yellow, cv2.COLOR_GRAY2BGR)
-    writer_mask_yellow.write(yellow_bgr)
-    writer_image.write(bgr_image)
+    writer_yellow.write(yellow_bgr)
+    writer.write(bgr_image)
 
     env.render(current_render_params)
 
