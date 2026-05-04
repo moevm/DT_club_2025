@@ -24,24 +24,32 @@ writer_yellow = cv2.VideoWriter(
 )
 
 
-# Константы скоростей
 SPEED_FORWARD = np.array([0.44, 0.0])
 SPEED_BACKWARD = np.array([-0.44, 0.0])
 SPEED_LEFT = np.array([0.0, 1.0])
 SPEED_RIGHT = np.array([0.0, -1.0])
 SPEED_BOOST_MULTIPLIER = 1.5
 
-# Константы для остановки у красной линии
 RED_STOP_DISTANCE = 150
 RED_MIN_CONTOUR_AREA = 25
 RED_STOP_SECONDS = 3.0
 RED_IGNORE_SECONDS = 2.0
 
+LANE_MIN_CONTOUR_AREA = 10
+LANE_FORWARD_SPEED = 0.22
+LANE_KP = 0.02
+LANE_MAX_STEERING = 1.0
+LANE_SINGLE_LINE_STEERING = 0.8
+LANE_SMOOTHING = 0.55
+
+YELLOW_MAX_X_RATIO = 0.75
+GREY_MIN_X_RATIO = 0.45
+MIN_LANE_WIDTH_PIXELS = 80
+
 RENDER_PARAMS = ["human", "top_down"]
 current_render_params = RENDER_PARAMS[0]
 
 
-# python3 main.py --map-name=udem1
 parser = argparse.ArgumentParser()
 parser.add_argument("--env-name", default="Duckietown-udem1-v0")
 parser.add_argument("--map-name", default="udem1")
@@ -170,11 +178,20 @@ def on_key_press(symbol, modifiers):
     global red_stop_timer
     global red_ignore_timer
 
+    global last_steering
+    global last_steering_angle
+
+    global lane_follow_enabled
+    global x_was_pressed
+
     if symbol == key.BACKSPACE or symbol == key.SLASH:
         print("RESET")
         red_stop = False
         red_stop_timer = 0.0
         red_ignore_timer = 0.0
+        last_steering = 0
+        last_steering_angle = 0.0
+        lane_follow_enabled = False
         env.reset()
         env.render()
 
@@ -200,6 +217,12 @@ def on_key_press(symbol, modifiers):
         if not is_show_masks:
             cv2.destroyAllWindows()
 
+    elif symbol == key.X:
+        if not x_was_pressed:
+            lane_follow_enabled = not lane_follow_enabled
+            x_was_pressed = True
+            print("lane_follow_enabled =", lane_follow_enabled)
+
     elif symbol == key.J:
         is_move_left = True
 
@@ -213,7 +236,14 @@ def on_key_press(symbol, modifiers):
         is_move_back = True
 
 
-# Register a keyboard handler
+@env.unwrapped.window.event
+def on_key_release(symbol, modifiers):
+    global x_was_pressed
+
+    if symbol == key.X:
+        x_was_pressed = False
+
+
 key_handler = key.KeyStateHandler()
 env.unwrapped.window.push_handlers(key_handler)
 
@@ -234,10 +264,10 @@ def get_yellow_mask(hsv_image):
     return cv2.inRange(hsv_image, lower, upper)
 
 
-def get_grey_mask(rgb_image):
-    grey_lower = np.array([160, 160, 160])
-    grey_upper = np.array([200, 200, 200])
-    return cv2.inRange(rgb_image, grey_lower, grey_upper)
+def get_grey_mask(hsv_image):
+    lower = np.array([0, 0, 120])
+    upper = np.array([180, 80, 255])
+    return cv2.inRange(hsv_image, lower, upper)
 
 
 def get_red_mask(hsv_image):
@@ -284,57 +314,184 @@ def is_red_line_close(mask_red):
     return distance_abs < RED_STOP_DISTANCE
 
 
+def get_median_x_from_contours(contours):
+    all_x = []
+
+    for contour in contours:
+        for point in contour:
+            all_x.append(point[0][0])
+
+    if not all_x:
+        return None
+
+    return float(np.median(all_x))
+
+
+def get_contour_median_x(contour):
+    all_x = []
+
+    for point in contour:
+        all_x.append(point[0][0])
+
+    if not all_x:
+        return None
+
+    return float(np.median(all_x))
+
+
+def get_yellow_x(contours_yellow, image_width):
+    filtered_contours = [
+        contour for contour in contours_yellow
+        if cv2.contourArea(contour) > LANE_MIN_CONTOUR_AREA
+    ]
+
+    if not filtered_contours:
+        return None
+
+    candidate_contours = []
+
+    for contour in filtered_contours:
+        x = get_contour_median_x(contour)
+
+        if x is not None and x < image_width * YELLOW_MAX_X_RATIO:
+            candidate_contours.append(contour)
+
+    if not candidate_contours:
+        return None
+
+    return get_median_x_from_contours(candidate_contours)
+
+
+def get_grey_x(contours_grey, yellow_x, image_width):
+    filtered_contours = [
+        contour for contour in contours_grey
+        if cv2.contourArea(contour) > LANE_MIN_CONTOUR_AREA
+    ]
+
+    if not filtered_contours:
+        return None
+
+    candidates = []
+
+    for contour in filtered_contours:
+        x = get_contour_median_x(contour)
+
+        if x is None:
+            continue
+
+        if yellow_x is not None:
+            if x > yellow_x + MIN_LANE_WIDTH_PIXELS:
+                candidates.append((cv2.contourArea(contour), x))
+        else:
+            if x > image_width * GREY_MIN_X_RATIO:
+                candidates.append((cv2.contourArea(contour), x))
+
+    if not candidates:
+        return None
+
+    candidates.sort(reverse=True, key=lambda item: item[0])
+    return candidates[0][1]
+
+
+def smooth_steering(steering_angle):
+    global last_steering_angle
+
+    steering_angle = np.clip(
+        steering_angle,
+        -LANE_MAX_STEERING,
+        LANE_MAX_STEERING,
+    )
+
+    steering_angle = (
+        LANE_SMOOTHING * steering_angle
+        + (1.0 - LANE_SMOOTHING) * last_steering_angle
+    )
+
+    last_steering_angle = steering_angle
+
+    return steering_angle
+
+
 def lane_follow(obs):
     global last_steering
+    global last_steering_angle
 
     h, w = obs.shape[:2]
     hsv_image = cv2.cvtColor(obs, cv2.COLOR_RGB2HSV)
 
-    mask = cv2.inRange(
-        hsv_image[h // 2:h - 1, :],
+    lower_half = hsv_image[h // 2:h - 1, :]
+
+    mask_yellow = cv2.inRange(
+        lower_half,
         np.array([20, 100, 100]),
         np.array([30, 255, 255]),
     )
 
-    contours, _ = cv2.findContours(
-        mask,
+    mask_grey = cv2.inRange(
+        lower_half,
+        np.array([0, 0, 120]),
+        np.array([180, 80, 255]),
+    )
+
+    contours_yellow, _ = cv2.findContours(
+        mask_yellow,
         cv2.RETR_EXTERNAL,
         cv2.CHAIN_APPROX_NONE,
     )
 
-    contours = [
-        contour for contour in contours
-        if cv2.contourArea(contour) > 10
-    ]
+    contours_grey, _ = cv2.findContours(
+        mask_grey,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_NONE,
+    )
 
-    lx = None
+    yellow_x = get_yellow_x(contours_yellow, w)
+    grey_x = get_grey_x(contours_grey, yellow_x, w)
 
-    if contours:
-        largest_contour = max(contours, key=cv2.contourArea)
-        moments = cv2.moments(largest_contour)
+    has_yellow = yellow_x is not None
+    has_grey = grey_x is not None
 
-        if moments["m00"] != 0:
-            lx = int(moments["m10"] / moments["m00"])
+    steering_angle = 0.0
 
-            center_x = w / 2
-            deviation = center_x - lx
+    if has_yellow and has_grey:
+        line_center_x = (yellow_x + grey_x) / 2.0
+        image_center_x = w / 2.0
 
-            if deviation > 0:
-                last_steering = 1
-            else:
-                last_steering = -1
+        delta_center = line_center_x - image_center_x
 
-    if lx is not None:
-        center_x = w / 2
-        deviation = center_x - lx
-        steering_angle = deviation / center_x
+        steering_angle = -LANE_KP * delta_center
+
+        if steering_angle > 0:
+            last_steering = 1
+        elif steering_angle < 0:
+            last_steering = -1
+        else:
+            last_steering = 0
+
+        print("yellow_x =", yellow_x)
+        print("grey_x =", grey_x)
+        print("line_center_x =", line_center_x)
+        print("delta_center =", delta_center)
+
+    elif has_grey and not has_yellow:
+        steering_angle = LANE_SINGLE_LINE_STEERING
+        last_steering = 1
+
+    elif has_yellow and not has_grey:
+        steering_angle = -LANE_SINGLE_LINE_STEERING
+        last_steering = -1
+
     else:
         if last_steering == 1:
-            steering_angle = 1.0
+            steering_angle = LANE_SINGLE_LINE_STEERING
         elif last_steering == -1:
-            steering_angle = -1.0
+            steering_angle = -LANE_SINGLE_LINE_STEERING
         else:
-            steering_angle = 0.0
+            steering_angle = last_steering_angle
+
+    steering_angle = smooth_steering(steering_angle)
+
+    print("lane steering =", steering_angle)
 
     return steering_angle
 
@@ -350,7 +507,7 @@ def process_bot_image(obs):
     hsv_image = cv2.cvtColor(obs, cv2.COLOR_RGB2HSV)
 
     mask_yellow = get_yellow_mask(hsv_image)
-    mask_grey = get_grey_mask(obs)
+    mask_grey = get_grey_mask(hsv_image)
     mask_red = get_red_mask(hsv_image)
 
     red_contours = get_filtered_contours(mask_red, 50)
@@ -382,6 +539,10 @@ red_stop_timer = 0.0
 red_ignore_timer = 0.0
 
 last_steering = 0
+last_steering_angle = 0.0
+
+lane_follow_enabled = False
+x_was_pressed = False
 
 
 def update(dt):
@@ -428,13 +589,11 @@ def update(dt):
     if is_move_back:
         action = move_back(env.cur_angle)
 
-    # Следование по желтой разметке при зажатии X
-    if key_handler[key.X]:
+    if lane_follow_enabled:
         obs_for_lane = env.render_obs()
         steering_angle = lane_follow(obs_for_lane)
-        action += np.array([SPEED_FORWARD[0] / 2, steering_angle])
+        action = np.array([LANE_FORWARD_SPEED, steering_angle])
 
-    # Если сейчас идет остановка на красной линии — стоим
     if red_stop:
         action = np.array([0.0, 0.0])
 
@@ -475,10 +634,12 @@ def update(dt):
     print("step_count = %s, reward=%.3f" % (env.unwrapped.step_count, reward))
     print("bot position = ", env.cur_pos)
     print("obs shape =", obs.shape)
+    print("lane_follow_enabled =", lane_follow_enabled)
     print("red_stop =", red_stop)
     print("red_stop_timer =", red_stop_timer)
     print("red_ignore_timer =", red_ignore_timer)
     print("last_steering =", last_steering)
+    print("last_steering_angle =", last_steering_angle)
 
     yellow_bgr = cv2.cvtColor(mask_yellow, cv2.COLOR_GRAY2BGR)
 
@@ -490,7 +651,6 @@ def update(dt):
 
 pyglet.clock.schedule_interval(update, 1.0 / env.unwrapped.frame_rate)
 
-# Enter main event loop
 pyglet.app.run()
 
 env.close()
