@@ -8,12 +8,14 @@ from pyglet.window import key
 
 from gym_duckietown.envs import DuckietownEnv
 
+
 writer = cv2.VideoWriter(
     "output.mp4",
     cv2.VideoWriter_fourcc(*"mp4v"),
     20,
     (640, 480),
 )
+
 writer_yellow = cv2.VideoWriter(
     "output_markup_yel.mp4",
     cv2.VideoWriter_fourcc(*"mp4v"),
@@ -21,15 +23,23 @@ writer_yellow = cv2.VideoWriter(
     (640, 480),
 )
 
+
 # Константы скоростей
 SPEED_FORWARD = np.array([0.44, 0.0])
-SPEED_BACKWARD = np.array([-0.44, 0])
-SPEED_LEFT = np.array([0, 1])
-SPEED_RIGHT = np.array([0, -1])
+SPEED_BACKWARD = np.array([-0.44, 0.0])
+SPEED_LEFT = np.array([0.0, 1.0])
+SPEED_RIGHT = np.array([0.0, -1.0])
 SPEED_BOOST_MULTIPLIER = 1.5
+
+# Константы для остановки у красной линии
+RED_STOP_DISTANCE = 150
+RED_MIN_CONTOUR_AREA = 25
+RED_STOP_SECONDS = 3.0
+RED_IGNORE_SECONDS = 2.0
 
 RENDER_PARAMS = ["human", "top_down"]
 current_render_params = RENDER_PARAMS[0]
+
 
 # python3 main.py --map-name=udem1
 parser = argparse.ArgumentParser()
@@ -44,6 +54,7 @@ parser.add_argument("--dynamics_rand", action="store_true", help="enable dynamic
 parser.add_argument("--frame-skip", default=1, type=int, help="number of frames to skip")
 parser.add_argument("--seed", default=42, type=int, help="seed")
 args = parser.parse_args()
+
 
 if args.env_name and args.env_name.find("Duckietown") != -1:
     env = DuckietownEnv(
@@ -66,7 +77,8 @@ env.render()
 
 def move_right(current_angle):
     global is_move_right
-    action = [0, 0]
+
+    action = np.array([0.0, 0.0])
 
     angle_deg = np.rad2deg(current_angle)
     delta = 5
@@ -84,12 +96,15 @@ def move_right(current_angle):
 
 def move_left(current_angle):
     global is_move_left
-    action = [0, 0]
+
+    action = np.array([0.0, 0.0])
 
     angle_deg = np.rad2deg(current_angle)
     delta = 5
 
-    if (angle_deg > 0 and angle_deg >= 180 - delta) or (angle_deg < 0 and angle_deg <= -180 + delta):
+    if (angle_deg > 0 and angle_deg >= 180 - delta) or (
+        angle_deg < 0 and angle_deg <= -180 + delta
+    ):
         is_move_left = False
     else:
         if 0 <= angle_deg < 180:
@@ -102,7 +117,8 @@ def move_left(current_angle):
 
 def move_forward(current_angle):
     global is_move_forward
-    action = [0, 0]
+
+    action = np.array([0.0, 0.0])
 
     angle_deg = np.rad2deg(current_angle)
     delta = 5
@@ -120,7 +136,8 @@ def move_forward(current_angle):
 
 def move_back(current_angle):
     global is_move_back
-    action = [0, 0]
+
+    action = np.array([0.0, 0.0])
 
     angle_deg = np.rad2deg(current_angle)
     delta = 5
@@ -149,9 +166,15 @@ def on_key_press(symbol, modifiers):
     global is_move_back
 
     global is_show_masks
+    global red_stop
+    global red_stop_timer
+    global red_ignore_timer
 
     if symbol == key.BACKSPACE or symbol == key.SLASH:
         print("RESET")
+        red_stop = False
+        red_stop_timer = 0.0
+        red_ignore_timer = 0.0
         env.reset()
         env.render()
 
@@ -159,6 +182,10 @@ def on_key_press(symbol, modifiers):
         env.unwrapped.cam_angle[0] = 0
 
     elif symbol == key.ESCAPE:
+        writer.release()
+        writer_yellow.release()
+        cv2.destroyAllWindows()
+        env.close()
         pyglet.app.exit()
 
     elif symbol == key.TAB:
@@ -175,10 +202,13 @@ def on_key_press(symbol, modifiers):
 
     elif symbol == key.J:
         is_move_left = True
+
     elif symbol == key.I:
         is_move_forward = True
+
     elif symbol == key.L:
         is_move_right = True
+
     elif symbol == key.K:
         is_move_back = True
 
@@ -224,8 +254,34 @@ def get_red_mask(hsv_image):
 
 
 def get_filtered_contours(mask, min_contour_area):
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours, _ = cv2.findContours(
+        mask,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE,
+    )
+
     return filter_small_contours(contours, min_contour_area)
+
+
+def is_red_line_close(mask_red):
+    h, w = mask_red.shape[:2]
+
+    mask = mask_red.copy()
+    mask[0:h // 2, :] = 0
+
+    contours = get_filtered_contours(mask, RED_MIN_CONTOUR_AREA)
+
+    if not contours:
+        return False
+
+    max_contour = max(contours, key=cv2.contourArea)
+
+    distance = cv2.pointPolygonTest(max_contour, (w // 2, h - 1), True)
+    distance_abs = abs(distance)
+
+    print("red line distance =", distance_abs)
+
+    return distance_abs < RED_STOP_DISTANCE
 
 
 def draw_contours_on_image(rgb_image, contours):
@@ -266,6 +322,10 @@ is_move_back = False
 
 is_show_masks = False
 
+red_stop = False
+red_stop_timer = 0.0
+red_ignore_timer = 0.0
+
 
 def update(dt):
     global current_render_params
@@ -275,16 +335,24 @@ def update(dt):
     global is_move_forward
     global is_move_back
 
+    global red_stop
+    global red_stop_timer
+    global red_ignore_timer
+
     action = np.array([0.0, 0.0])
 
     if key_handler[key.W]:
         action += SPEED_FORWARD
+
     if key_handler[key.S]:
         action += SPEED_BACKWARD
+
     if key_handler[key.A]:
         action += SPEED_LEFT
+
     if key_handler[key.D]:
         action += SPEED_RIGHT
+
     if key_handler[key.SPACE]:
         action = np.array([0.0, 0.0])
 
@@ -293,16 +361,42 @@ def update(dt):
 
     if is_move_right:
         action = move_right(env.cur_angle)
+
     if is_move_left:
         action = move_left(env.cur_angle)
+
     if is_move_forward:
         action = move_forward(env.cur_angle)
+
     if is_move_back:
         action = move_back(env.cur_angle)
+
+    if red_stop:
+        action = np.array([0.0, 0.0])
 
     obs, reward, _, _ = env.step(action)
 
     bgr_image, hsv_image, mask_yellow, mask_grey, mask_red, result_contours = process_bot_image(obs)
+
+    red_line_close = is_red_line_close(mask_red)
+
+    if red_stop:
+        red_stop_timer += dt
+
+        if red_stop_timer >= RED_STOP_SECONDS:
+            red_stop = False
+            red_stop_timer = 0.0
+            red_ignore_timer = RED_IGNORE_SECONDS
+
+    elif red_ignore_timer > 0:
+        red_ignore_timer -= dt
+
+        if red_ignore_timer < 0:
+            red_ignore_timer = 0.0
+
+    elif red_line_close:
+        red_stop = True
+        red_stop_timer = 0.0
 
     if is_show_masks:
         show_bot_images(
@@ -316,9 +410,13 @@ def update(dt):
 
     print("step_count = %s, reward=%.3f" % (env.unwrapped.step_count, reward))
     print("bot position = ", env.cur_pos)
-    print(obs.shape)
+    print("obs shape =", obs.shape)
+    print("red_stop =", red_stop)
+    print("red_stop_timer =", red_stop_timer)
+    print("red_ignore_timer =", red_ignore_timer)
 
     yellow_bgr = cv2.cvtColor(mask_yellow, cv2.COLOR_GRAY2BGR)
+
     writer_yellow.write(yellow_bgr)
     writer.write(bgr_image)
 
