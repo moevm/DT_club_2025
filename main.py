@@ -9,9 +9,28 @@ from pyglet.window import key
 
 from gym_duckietown.envs import DuckietownEnv
 
+writer = cv2.VideoWriter(
+    "output.mp4",
+    cv2.VideoWriter_fourcc(*"mp4v"),
+    20,
+    (640, 480),
+)
+writer_yellow = cv2.VideoWriter(
+    "output_markup_yel.mp4",
+    cv2.VideoWriter_fourcc(*"mp4v"),
+    20,
+    (640, 480),
+)
 
-# MOVEMENT
-speed = 0.44
+# Константы скоростей
+SPEED_FORWARD = np.array([0.44, 0.0])
+SPEED_BACKWARD = np.array([-0.44, 0])
+SPEED_LEFT = np.array([0, 1])
+SPEED_RIGHT = np.array([0, -1])
+SPEED_BOOST_MULTIPLIER = 1.5
+
+RENDER_PARAMS = ["human", "top_down"]
+current_render_params = RENDER_PARAMS[0]
 
 # python3 main.py --map-name=udem1
 parser = argparse.ArgumentParser()
@@ -19,21 +38,11 @@ parser.add_argument("--env-name", default="Duckietown-udem1-v0")
 parser.add_argument("--map-name", default="udem1")
 parser.add_argument("--distortion", default=False, action="store_true")
 parser.add_argument("--camera_rand", default=False, action="store_true")
-parser.add_argument(
-    "--draw-curve", action="store_true", help="draw the lane following curve"
-)
-parser.add_argument(
-    "--draw-bbox", action="store_true", help="draw collision detection bounding boxes"
-)
-parser.add_argument(
-    "--domain-rand", action="store_true", help="enable domain randomization"
-)
-parser.add_argument(
-    "--dynamics_rand", action="store_true", help="enable dynamics randomization"
-)
-parser.add_argument(
-    "--frame-skip", default=1, type=int, help="number of frames to skip"
-)
+parser.add_argument("--draw-curve", action="store_true", help="draw the lane following curve")
+parser.add_argument("--draw-bbox", action="store_true", help="draw collision detection bounding boxes")
+parser.add_argument("--domain-rand", action="store_true", help="enable domain randomization")
+parser.add_argument("--dynamics_rand", action="store_true", help="enable dynamics randomization")
+parser.add_argument("--frame-skip", default=1, type=int, help="number of frames to skip")
 parser.add_argument("--seed", default=42, type=int, help="seed")
 args = parser.parse_args()
 
@@ -55,56 +64,81 @@ else:
 env.reset()
 env.render()
 
-def move_to_target(current_angle, target, delta = 3):
-    action = [0, 0]
-    angle_deg = np.rad2deg(current_angle)
-    # угол в [-180, 180]
-    angle_deg = ((angle_deg + 180) % 360) - 180
-    
-    if abs(angle_deg - target) <= delta:
-        return action
-    
-    # Определение направления кратчайшего пути
-    difference = (target - angle_deg + 180) % 360 - 180
-    action = [0, speed if difference > 0 else -speed]
-    
-    return action
- 
-def move_down(current_angle):
-    return move_to_target(current_angle, -90)
-
-def move_up(current_angle):
-    return move_to_target(current_angle, 90)
 
 def move_right(current_angle):
-    return move_to_target(current_angle, 0)
+    global is_move_right
+    action = [0, 0]
+
+    angle_deg = np.rad2deg(current_angle)
+    delta = 5
+
+    if -delta <= angle_deg <= delta:
+        is_move_right = False
+    else:
+        if 0 < angle_deg <= 180:
+            action = SPEED_RIGHT
+        elif -180 <= angle_deg <= 0:
+            action = SPEED_LEFT
+
+    return action
+
 
 def move_left(current_angle):
-    return move_to_target(current_angle, 180)
+    global is_move_left
+    action = [0, 0]
+
+    angle_deg = np.rad2deg(current_angle)
+    delta = 5
+
+    if (angle_deg > 0 and angle_deg >= 180 - delta) or (angle_deg < 0 and angle_deg <= -180 + delta):
+        is_move_left = False
+    else:
+        if 0 <= angle_deg < 180:
+            action = SPEED_LEFT
+        elif -180 <= angle_deg < 0:
+            action = SPEED_RIGHT
+
+    return action
 
 
-RENDER_PARAMS = ["human", "top_down"]
+def move_forward(current_angle):
+    global is_move_forward
+    action = [0, 0]
 
-writer = cv2.VideoWriter( 
-    "output.mp4",
-    cv2.VideoWriter_fourcc(*"mp4v"),
-    20,
-    (640, 480), #(width, height) (столбцы, строки)
-)
+    angle_deg = np.rad2deg(current_angle)
+    delta = 5
 
-writer_yellow = cv2.VideoWriter( 
-    "output_markup_yel.mp4",
-    cv2.VideoWriter_fourcc(*"mp4v"),
-    20,
-    (640, 480), #(width, height) (столбцы, строки)
-)
+    if 90 - delta <= angle_deg <= 90 + delta:
+        is_move_forward = False
+    else:
+        if -90 <= angle_deg <= 90:
+            action = SPEED_LEFT
+        else:
+            action = SPEED_RIGHT
 
-view_mode = RENDER_PARAMS[0]
-tap_move_right = False
-tap_move_left = False
-tap_move_up = False
-tap_move_down = False
-is_view_image = False
+    return action
+
+
+def move_back(current_angle):
+    global is_move_back
+    action = [0, 0]
+
+    angle_deg = np.rad2deg(current_angle)
+    delta = 5
+
+    if -90 - delta <= angle_deg <= -90 + delta:
+        is_move_back = False
+    else:
+        if angle_deg > -90:
+            if angle_deg > 90:
+                action = SPEED_LEFT
+            else:
+                action = SPEED_RIGHT
+        else:
+            action = SPEED_LEFT
+
+    return action
+
 
 @env.unwrapped.window.event
 def on_key_press(symbol, modifiers):
@@ -112,7 +146,12 @@ def on_key_press(symbol, modifiers):
     This handler processes keyboard commands that
     control the simulation
     """
-    global tap_move_right, tap_move_left, tap_move_up, tap_move_down, view_mode
+    global current_render_params
+
+    global is_move_right
+    global is_move_left
+    global is_move_forward
+    global is_move_back
 
     if symbol == key.BACKSPACE or symbol == key.SLASH:
         print("RESET")
@@ -127,32 +166,25 @@ def on_key_press(symbol, modifiers):
         env.close()
         sys.exit(0)
 
+    # Смена вида камеры на TAB
+    elif key_handler[key.TAB]:
+        if current_render_params == RENDER_PARAMS[0]:
+            current_render_params = RENDER_PARAMS[1]
+        elif current_render_params == RENDER_PARAMS[1]:
+            current_render_params = RENDER_PARAMS[0]
+
+    # Автоматический поворот на JILK
+    elif key_handler[key.J]:
+        is_move_left = True
+    elif key_handler[key.I]:
+        is_move_forward = True
+    elif key_handler[key.L]:
+        is_move_right = True
+    elif key_handler[key.K]:
+        is_move_back = True
+
     elif key_handler[key.TAB]:
         view_mode = RENDER_PARAMS[1] if view_mode == RENDER_PARAMS[0] else RENDER_PARAMS[0]
-
-    elif symbol == key.D:
-        tap_move_right = True
-        tap_move_left = False
-        tap_move_up = False
-        tap_move_down = False
-    elif symbol == key.A:
-        tap_move_right = False
-        tap_move_left = True
-        tap_move_up = False
-        tap_move_down = False
-    elif symbol == key.W:
-        tap_move_right = False
-        tap_move_left = False
-        tap_move_up = True
-        tap_move_down = False
-    elif symbol == key.S:
-        tap_move_right = False
-        tap_move_left = False
-        tap_move_up = False
-        tap_move_down = True
-
-    elif symbol == key.F:
-        is_view_image = True
 
 # Register a keyboard handler
 key_handler = key.KeyStateHandler()
@@ -160,7 +192,6 @@ env.unwrapped.window.push_handlers(key_handler)
 
 
 def get_bot_image(obs):
-
 
     to_show = cv2.cvtColor(obs, cv2.COLOR_RGB2BGR)
 
@@ -183,46 +214,51 @@ def get_bot_image(obs):
 
     cv2.waitKey(0)
 
+is_move_right = False
+is_move_left = False
+is_move_forward = False
+is_move_back = False
 
 def update(dt):
     """
     This function is called at every frame to handle
     movement/stepping and redrawing
     """
+    global current_render_params
+
+    global is_move_right
+    global is_move_left
+    global is_move_forward
+    global is_move_back
 
     global is_view_image
 
     action = np.array([0.0, 0.0])
 
-    if key_handler[key.UP]:
-        # [-1, 1] - |+-1|: максимальная скорость (~0.30м/c)
-        # 1 -> 0 : 0.5 (~ в 2 раза меньше скорость!)
-        action += np.array([speed, 0.0])
-    if key_handler[key.DOWN]: 
-        action += np.array([speed, 0])
-    if key_handler[key.LEFT]:
-        action += np.array([0, 1])
-    if key_handler[key.RIGHT]:
-        action += np.array([0, -1])
+    if key_handler[key.W]:
+        action += SPEED_FORWARD
+    if key_handler[key.S]:
+        action += SPEED_BACKWARD
+    if key_handler[key.A]:
+        action += SPEED_LEFT
+    if key_handler[key.D]:
+        action += SPEED_RIGHT
     if key_handler[key.SPACE]:
-        action = np.array([0, 0])
-
-    if tap_move_right:
-        action = move_right(env.cur_angle)
-    if tap_move_left:
-        action = move_left(env.cur_angle)
-    if tap_move_up:
-        action = move_up(env.cur_angle)
-    if tap_move_down:
-        action = move_down(env.cur_angle)
-
-
-
+        action = np.array([0.0, 0.0])
     # Speed boost
     if key_handler[key.LSHIFT]:
-        action *= 1.5
+        action *= SPEED_BOOST_MULTIPLIER
 
-    obs, reward, done, info = env.step(action) # -> return as RGB format
+    if is_move_right:
+        action = move_right(env.cur_angle)
+    if is_move_left:
+        action = move_left(env.cur_angle)
+    if is_move_forward:
+        action = move_forward(env.cur_angle)
+    if is_move_back:
+        action = move_back(env.cur_angle)
+
+    obs, reward, _, _ = env.step(action)
 
     if key_handler[key.F]:
         if not is_view_image:
@@ -230,9 +266,7 @@ def update(dt):
             is_view_image = True
         else:
             is_view_image = False
-    # obs - картинка (в виде трехмерной матрицы)
-    # done = True|False
-    
+
     print(obs.shape)
     print("step_count = %s, reward=%.3f" % (env.unwrapped.step_count, reward))
     print("bot position = ", env.cur_pos)
@@ -248,10 +282,10 @@ def update(dt):
 
     writer_yellow.write(hsv2rgb_yel_image)
 
-    bgr_image = cv2.cvtColor(obs,cv2.COLOR_BGR2RGB)
+    bgr_image = cv2.cvtColor(obs, cv2.COLOR_BGR2RGB)
     writer.write(bgr_image)
 
-    env.render(view_mode)
+    env.render(current_render_params)
 
 
 pyglet.clock.schedule_interval(update, 1.0 / env.unwrapped.frame_rate)
