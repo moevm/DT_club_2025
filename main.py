@@ -5,9 +5,9 @@ import gym
 import numpy as np
 import pyglet
 from pyglet.window import key
+from pyapriltags import Detector
 
 from gym_duckietown.envs import DuckietownEnv
-
 
 writer = cv2.VideoWriter(
     "output.mp4",
@@ -21,6 +21,16 @@ writer_yellow = cv2.VideoWriter(
     cv2.VideoWriter_fourcc(*"mp4v"),
     20,
     (640, 480),
+)
+
+apriltag_detector = Detector(
+    families="tag36h11",
+    nthreads=1,
+    quad_decimate=1.0,
+    quad_sigma=0.0,
+    refine_edges=1,
+    decode_sharpening=0.25,
+    debug=0,
 )
 
 
@@ -110,9 +120,7 @@ def move_left(current_angle):
     angle_deg = np.rad2deg(current_angle)
     delta = 5
 
-    if (angle_deg > 0 and angle_deg >= 180 - delta) or (
-        angle_deg < 0 and angle_deg <= -180 + delta
-    ):
+    if (angle_deg > 0 and angle_deg >= 180 - delta) or (angle_deg < 0 and angle_deg <= -180 + delta):
         is_move_left = False
     else:
         if 0 <= angle_deg < 180:
@@ -183,6 +191,7 @@ def on_key_press(symbol, modifiers):
 
     global lane_follow_enabled
     global x_was_pressed
+    global is_april_tag_detect
 
     if symbol == key.BACKSPACE or symbol == key.SLASH:
         print("RESET")
@@ -234,6 +243,9 @@ def on_key_press(symbol, modifiers):
 
     elif symbol == key.K:
         is_move_back = True
+
+    elif symbol == key.Q:
+        is_april_tag_detect = True
 
 
 @env.unwrapped.window.event
@@ -297,7 +309,7 @@ def is_red_line_close(mask_red):
     h, w = mask_red.shape[:2]
 
     mask = mask_red.copy()
-    mask[0:h // 2, :] = 0
+    mask[0 : h // 2, :] = 0
 
     contours = get_filtered_contours(mask, RED_MIN_CONTOUR_AREA)
 
@@ -312,6 +324,46 @@ def is_red_line_close(mask_red):
     print("red line distance =", distance_abs)
 
     return distance_abs < RED_STOP_DISTANCE
+
+
+def detect_apriltags(frame):
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    tags = apriltag_detector.detect(gray, estimate_tag_pose=False)
+
+    for tag in tags:
+        corners = tag.corners.astype(int)
+        center = tuple(tag.center.astype(int))
+
+        for i in range(4):
+            cv2.line(
+                frame,
+                tuple(corners[i]),
+                tuple(corners[(i + 1) % 4]),
+                (0, 255, 0),
+                2,
+            )
+
+        cv2.circle(frame, center, 5, (0, 0, 255), -1)
+
+        cv2.putText(
+            frame,
+            f"id={tag.tag_id}",
+            (center[0] + 10, center[1] - 10),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (255, 0, 0),
+            2,
+            cv2.LINE_AA,
+        )
+
+        print(f"AprilTag найден: id={tag.tag_id}, center={tag.center}")
+    
+    to_show = frame[..., ::-1]
+    cv2.imshow("AprilTag", to_show)
+    cv2.waitKey(1)
+
+    return tags
 
 
 def get_median_x_from_contours(contours):
@@ -340,10 +392,7 @@ def get_contour_median_x(contour):
 
 
 def get_yellow_x(contours_yellow, image_width):
-    filtered_contours = [
-        contour for contour in contours_yellow
-        if cv2.contourArea(contour) > LANE_MIN_CONTOUR_AREA
-    ]
+    filtered_contours = [contour for contour in contours_yellow if cv2.contourArea(contour) > LANE_MIN_CONTOUR_AREA]
 
     if not filtered_contours:
         return None
@@ -363,10 +412,7 @@ def get_yellow_x(contours_yellow, image_width):
 
 
 def get_grey_x(contours_grey, yellow_x, image_width):
-    filtered_contours = [
-        contour for contour in contours_grey
-        if cv2.contourArea(contour) > LANE_MIN_CONTOUR_AREA
-    ]
+    filtered_contours = [contour for contour in contours_grey if cv2.contourArea(contour) > LANE_MIN_CONTOUR_AREA]
 
     if not filtered_contours:
         return None
@@ -402,10 +448,7 @@ def smooth_steering(steering_angle):
         LANE_MAX_STEERING,
     )
 
-    steering_angle = (
-        LANE_SMOOTHING * steering_angle
-        + (1.0 - LANE_SMOOTHING) * last_steering_angle
-    )
+    steering_angle = LANE_SMOOTHING * steering_angle + (1.0 - LANE_SMOOTHING) * last_steering_angle
 
     last_steering_angle = steering_angle
 
@@ -419,7 +462,7 @@ def lane_follow(obs):
     h, w = obs.shape[:2]
     hsv_image = cv2.cvtColor(obs, cv2.COLOR_RGB2HSV)
 
-    lower_half = hsv_image[h // 2:h - 1, :]
+    lower_half = hsv_image[h // 2 : h - 1, :]
 
     mask_yellow = cv2.inRange(
         lower_half,
@@ -543,6 +586,7 @@ last_steering_angle = 0.0
 
 lane_follow_enabled = False
 x_was_pressed = False
+is_april_tag_detect = False
 
 
 def update(dt):
@@ -590,9 +634,13 @@ def update(dt):
         action = move_back(env.cur_angle)
 
     if lane_follow_enabled:
-        obs_for_lane = env.render_obs()
-        steering_angle = lane_follow(obs_for_lane)
+        obs_copy = env.render_obs()
+        steering_angle = lane_follow(obs_copy)
         action = np.array([LANE_FORWARD_SPEED, steering_angle])
+
+    if is_april_tag_detect:
+        obs_copy = env.render_obs()
+        detect_apriltags(obs_copy)
 
     if red_stop:
         action = np.array([0.0, 0.0])

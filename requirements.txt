@@ -1,0 +1,8 @@
+numpy==1.20.0
+opencv-python==4.10.0.84
+PyGeometry-z6==2.1.5
+trimesh==4.0.9
+duckietown-world-daffy==6.4.3
+pyglet==1.5.11
+pyapriltags==3.4.3.1
+pillow == 7.0.0
